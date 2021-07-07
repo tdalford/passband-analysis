@@ -405,27 +405,6 @@ def remove_poly(timeseries, order=5):
     poly_template = np.polyval(poly_params, x)
     return (timeseries - poly_template, poly_template)
 
-# selects center part of interferogram
-# def center_interferogram(interferogram,N_edge_ignore,N_after_centering):
-#    #find the maximum of the interferogam
-#    nsamps = np.size(interferogram)
-#    max_ind = (np.where(interferogram == np.max(interferogram[nsamps/2-N_edge_ignore:nsamps/2+N_edge_ignore])))[0]
-#
-#    # select a region around the center with high s/n
-#    N_center = N_after_centering  ## this implcitly reduced the resolution from what is listed above *********
-#    center_section = interferogram[max_ind -N_center/2: max_ind +N_center/2 ]
-#    return(center_section)
-
-
-# THIS MIGHT NEED TO BE CHANGED- ALSO ODD IS ALREADY GOOD RIGHT??
-# def center_inerferogram(interferogram):
-#     if np.size(interferogram) % 2 == 1:
-#         return(interferogram[0:-1])
-#     return interferogram
-
-
-# corrects for phase and returns bandpass
-
 
 def center_interferogram(interferogram, max_ind=None):
     '''center interferogram about the maximum'''
@@ -637,32 +616,14 @@ def invert_interferogram(interferogram, window):
     phase_corrected = fft_interferogram * np.exp(-1j * phase_spectrum)
     return phase_corrected
 
-# generates frequency range for the passband data
-
 
 def frequency(raw_passband, c, fts_stage_step_size, fts_frequency_cal):
+    # generates frequency range for the passband data
     N_samples_kept = np.size(raw_passband)
     Resolution = c / (fts_stage_step_size * N_samples_kept) / \
         4. * fts_frequency_cal
     frequency = np.arange(N_samples_kept / 2) * Resolution
     return(frequency)
-
-
-# For getting rid of annoying divide by zero errors
-def change_zeros(arr):
-    arr[arr == 0.] = arr[arr == 0.] + .01
-    return arr
-
-# generates a Rayleigh-Jeans correction for the passband
-# input frequency in Hz
-
-
-def RJ_correction(frequency, h, k, t_lamp, t_ambient):
-    frequency = change_zeros(frequency)
-    RJ_correction = 1. / (np.exp(h * frequency / (k * t_lamp)) - 1.) - \
-        1. / (np.exp(h * frequency / (k * t_ambient)) - 1.)
-    RJ_correction *= 2 * h * frequency ** 3 / c ** 2
-    return(RJ_correction)
 
 
 def find_peak(passband, peak_index):
@@ -683,109 +644,13 @@ def find_peak(passband, peak_index):
     return (peak_start + 2, peak_index + peak_end)
 
 
-def RJ_corrected_band(passband, rj_correction, bin_min):
-    max_index = np.argmax(passband[bin_min:]) + bin_min
-    peak_start, peak_end = find_peak(passband, max_index)
-    if (peak_start is None):
-        return None
-    rj_correction[:peak_start] = rj_correction[peak_end]
-    rj_correction[peak_end:] = rj_correction[peak_end]
-
-    # rj_correction[:(peak_start - 10)] = rj_correction[peak_end]
-    # rj_correction[(peak_end + 10):] = rj_correction[peak_end]
-    return passband / rj_correction
-
-
-# applies the RJ correction to the passband
-def RJ_corrected_passband(passband, RJ_correction, rj_start_index=0):
-    # make it so that we only correct past the start index!
-    # this way the low frequency noise doesn't get amplified
-    # only correct the region inside the bandpass!
-
-    # start at the max value and just go until we stop decreasing/increasing
-    n_samples_kept = np.size(passband)
-    final_pass_band = (np.real(passband))[
-        0: int(n_samples_kept/2)] / RJ_correction
-    return(final_pass_band)
-
-# used for fitting a Rayleigh-Jeans law to band to subtract noise
-# input frequency in Hz
-
-
-def RJ_fit(frequency, a):
-    h = 6.626e-34  # planck's constant
-    k = 1.38e-23   # boltzman constant
-    c = 3e8     # speed of light
-    T_lamp = 600.      # assumed load temperature of the heater lamp
-    T_ambient = 280.       # ambient tempearture load
-
-    RJ_correction = 2 * h * frequency**3 / c**2
-
-    frequency = change_zeros(frequency)
-    RJ_correction *= a/(np.exp(h*frequency/(k*T_lamp)) - 1.) - \
-        1./(np.exp(h*frequency/(k*T_ambient)) - 1.)
-    return (1e7)/RJ_correction
-
-
-def RJ_clean(pass_band, frequency_Hz, RJ_corr, f_ignore_around_peak, bin_min):
-
-    # select data ignoring the low edge, and the pass-band region
-    i_max = np.argmax(pass_band[bin_min: np.size(frequency_Hz)]) + bin_min
-    n_ignore_around_peak = int(np.floor(i_max * f_ignore_around_peak))
-    passband_RJcorr = RJ_corrected_passband(pass_band, RJ_corr)
-    x = np.concatenate([frequency_Hz[bin_min:i_max-n_ignore_around_peak],
-                        frequency_Hz[i_max+n_ignore_around_peak:]])
-    y = np.concatenate([passband_RJcorr[bin_min:i_max-n_ignore_around_peak],
-                        passband_RJcorr[i_max+n_ignore_around_peak:]])
-    errors = 1./np.concatenate([RJ_corr[bin_min:i_max-n_ignore_around_peak],
-                                RJ_corr[i_max+n_ignore_around_peak:]])
-    # do the fit
-    popt, pcov = optimize.curve_fit(RJ_fit, x, y, sigma=errors)
-    fit = RJ_fit(frequency_Hz, popt[0])
-    # remove the fit
-    cleaned = passband_RJcorr[0: np.size(frequency_Hz)] - fit
-    # return the cleand data
-    return(cleaned)
-
-
-def RJ_clean_test(pass_band, frequency_Hz, RJ_corr, f_ignore_around_peak, bin_min):
-
-    # select data ignoring the low edge, and the pass-band region
-    i_max = np.argmax(pass_band[bin_min: np.size(frequency_Hz)]) + bin_min
-    n_ignore_around_peak = int(np.floor(i_max * f_ignore_around_peak))
-    passband_RJcorr = (pass_band / RJ_corr)
-    x = frequency_Hz[bin_min:i_max - n_ignore_around_peak]
-    y = passband_RJcorr[bin_min:i_max-n_ignore_around_peak]
-    # x = np.concatenate([frequency_Hz[bin_min:i_max-n_ignore_around_peak],
-    #                     frequency_Hz[i_max+n_ignore_around_peak:]])
-    # y = np.concatenate([passband_RJcorr[bin_min:i_max-n_ignore_around_peak],
-    #                     passband_RJcorr[i_max+n_ignore_around_peak:]])
-    # errors = 1./np.concatenate([RJ_corr[bin_min:i_max-n_ignore_around_peak],
-    #                             RJ_corr[i_max+n_ignore_around_peak:]])
-    errors = 1. / RJ_corr[bin_min:i_max-n_ignore_around_peak]
-    # do the fit
-    popt, pcov = optimize.curve_fit(RJ_fit, x, y, sigma=errors)
-    fit = RJ_fit(frequency_Hz, popt[0])
-    plt.plot(frequency_Hz[bin_min:i_max + 20] / 1e9,
-             passband_RJcorr[bin_min:i_max + 20])
-    plt.plot(frequency_Hz[bin_min:(i_max + 20)] / 1e9,
-             fit[bin_min:(i_max + 20)])
-    plt.title('fitted out portion')
-    # plt.show()
-    # remove the fit
-    cleaned = passband_RJcorr[0: np.size(frequency_Hz)] - fit
-    # return the cleand data
-    return(cleaned)
-
-
-def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal, t_lamp,
-                 t_ambient, n_rms_iters=5, spike_threshold=10,
-                 bin_min_freq=15, lower_bound=22., upper_bound=35.,
-                 slope_cut=1e-3, poly_order=5, end_fit_freq=23,
-                 noise_start_freq=60, f_ignore_around_peak=3, fit_noise=True,
-                 apply_RJ_correction=False, ndf_correction_func=None,
-                 alpha=None, max_ind=None, subtract_mean=True,
-                 edge_power_limit=.05, normalize=True):
+def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
+                 n_rms_iters=5, spike_threshold=10, bin_min_freq=15,
+                 lower_bound=22., upper_bound=35., slope_cut=1e-3,
+                 poly_order=5, end_fit_freq=23, noise_start_freq=60,
+                 f_ignore_around_peak=3, fit_noise=True,
+                 ndf_correction_func=None, alpha=None, max_ind=None,
+                 subtract_mean=True, edge_power_limit=.05, normalize=True):
     if (max_ind is None):
         max_ind = np.argmax(interferogram)  # results may vary...
     # phase_corrected_passband = phase_correct_interferogram(
@@ -804,22 +669,16 @@ def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal, t_lamp,
     bin_min = find_freq(frequency_hz, bin_min_freq)
     passband = phase_corrected_passband
 
-    if (apply_RJ_correction):
-        rj_correction = RJ_correction(frequency_hz, h, k, t_lamp, t_ambient)
-        passband = RJ_clean(phase_corrected_passband, frequency_hz,
-                            rj_correction, f_ignore_around_peak, bin_min)
+    passband = phase_corrected_passband[
+        0: int(np.ceil(np.size(phase_corrected_passband) / 2))].real
 
-    else:
-        passband = phase_corrected_passband[
-            0: int(np.ceil(np.size(phase_corrected_passband) / 2))].real
-
-        if fit_noise:
-            # plt.plot(frequency_hz / 1e9, passband)
-            # plt.show()
-            # fit a power law to this to reduce noise
-            passband = remove_powerlaw_noise(
-                frequency_hz, passband, end_fit_freq,
-                noise_start_freq)
+    if fit_noise:
+        # plt.plot(frequency_hz / 1e9, passband)
+        # plt.show()
+        # fit a power law to this to reduce noise
+        passband = remove_powerlaw_noise(
+            frequency_hz, passband, end_fit_freq,
+            noise_start_freq)
     if (ndf_correction_func is not None):
         ndf_correction = ndf_correction_func(frequency_hz, alpha)
         passband = passband / ndf_correction
