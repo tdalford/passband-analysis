@@ -860,8 +860,9 @@ def obtain_passbands(
 
                 pixel_position = get_pixel_position(channel, x_positions,
                                                     y_positions)
-                frequency_calibration_factor = get_frequency_calibration_factor(
-                    centroid_to_use, pixel_position)
+                frequency_calibration_factor = \
+                    get_frequency_calibration_factor(
+                        centroid_to_use, pixel_position)
 
                 # set a common set of frequencies for this
                 common_frequencies = frequency(
@@ -1385,26 +1386,22 @@ def get_band_attrs(band, frequencies, lower_bound, upper_bound, slope_cut,
 
 
 def get_repeats(total_good_band_channels, band_num, ch=None):
-    # Add all these to a giant list and get the channel with the most counts
-    # total_channels = []
-    # for data_set in total_good_band_channels:
-    #     good_channels = data_set[band_num]
-    #     total_channels.extend(good_channels)
-    # total_count = np.unique(total_channels, return_counts=True)
-    # return total_count
-
     # Actually hasmap these with channel -> list of datasets
-    channel_set_map = {}
-    for i, data_set in enumerate(total_good_band_channels):
-        for channel in data_set[band_num]:
-            if channel not in channel_set_map.keys():
-                channel_set_map[channel] = []
-            channel_set_map[channel].append(i)
+    channel_set_map = get_channel_dict(total_good_band_channels, band_num)
 
     if (ch is not None):
-        return ch, channel_set_map[channel]
+        return ch, channel_set_map[ch]
     max_channel = max(channel_set_map, key=lambda x: len(channel_set_map[x]))
     return max_channel, channel_set_map[max_channel]
+
+
+def get_top_repeats(total_good_band_channels, band_num, n=5):
+    set_map = get_channel_dict(total_good_band_channels, band_num)
+    ch_array = np.zeros((len(set_map), 2), dtype='int')
+    # first get an array with ch, # of channels
+    for i, ch in enumerate(set_map.keys()):
+        ch_array[i] = [ch, len(set_map[ch])]
+    return ch_array[np.argsort(ch_array[:, 1])][::-1][:n][:, 0]
 
 
 def get_channel_dict(total_good_band_channels, band_num):
@@ -1527,9 +1524,11 @@ def get_centroid_response(run_num, band_num, total_good_channels, array_data,
     # print(good_channels[top_half])
     if passband_kwargs['plots']:
         plt.scatter(good_x[top_half], good_y[top_half], c='green',
-                    s=get_amplitudes([array_data[run_num]], good_channels[top_half]))
+                    s=get_amplitudes([array_data[run_num]], good_channels[
+                        top_half]))
         plt.scatter(good_x[bottom_half], good_y[bottom_half], c='red',
-                    s=get_amplitudes([array_data[run_num]], good_channels[bottom_half]))
+                    s=get_amplitudes([array_data[run_num]], good_channels[
+                        bottom_half]))
         plt.show()
 
     left_half = np.where(good_points[:, 0] < centroid[0])
@@ -1565,8 +1564,9 @@ def get_centroid_response(run_num, band_num, total_good_channels, array_data,
 
     average_attrs = []
     for i, (attrs, average) in enumerate(zip(total_attrs, total_averages)):
-        average_center_freq, average_bandwidth, lower_edge, upper_edge = get_band_attrs(
-            average, frequencies, lower_bound, upper_bound, 1e-10)
+        average_center_freq, average_bandwidth, lower_edge, upper_edge = \
+            get_band_attrs(average, frequencies, lower_bound, upper_bound,
+                           1e-10)
 
         average_attrs.append([average_center_freq, average_bandwidth,
                               lower_edge, upper_edge])
@@ -1789,14 +1789,6 @@ def plot_spatial_variation(attr_data, x_positions, y_positions, attr_index):
     plt.grid(False)
 
 
-def get_top_repeats(set_map, n=5):
-    ch_array = np.zeros((len(set_map), 2), dtype='int')
-    # first get an array with ch, # of channels
-    for i, ch in enumerate(set_map.keys()):
-        ch_array[i] = [ch, len(set_map[ch])]
-    return ch_array[np.argsort(ch_array[:, 1])][::-1][:n][:, 0]
-
-
 def channel_spread(ch, run_indices, all_attrs):
     plt.figure(figsize=(10, 5))
     freqs = all_attrs['frequencies']
@@ -1806,11 +1798,13 @@ def channel_spread(ch, run_indices, all_attrs):
         if len(channel_ind) != 1:
             continue
         channel_ind = channel_ind[0]
-        passband = all_attrs['individual_run_data']['passbands'][run][channel_ind]
+        passband = all_attrs['individual_run_data']['passbands'][run][
+            channel_ind]
         center, width, snr, low_edge, upper_edge = all_attrs[
             'individual_run_data']['attrs'][run][channel_ind][1:]
-        plt.plot(freqs / 1e9, passband, alpha=.8, label='run %s: %.1f %.3g, %.3g %.1f %.1f' % (
-            run, center, width, snr, low_edge, upper_edge))
+        plt.plot(freqs / 1e9, passband, alpha=.8,
+                 label='run %s: %.1f %.3g, %.3g %.1f %.1f' % (
+                     run, center, width, snr, low_edge, upper_edge))
 
     # Plot total average band
     plt.plot(freqs / 1e9, all_attrs['total_average_band'], '--', color='black',
