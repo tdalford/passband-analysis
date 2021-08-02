@@ -639,18 +639,16 @@ def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
                  n_rms_iters=5, spike_threshold=10, take_sqrt=False,
                  bin_min_freq=15, lower_bound=22., upper_bound=35.,
                  slope_cut=1e-3, poly_order=5, end_fit_freq=23,
-                 noise_bounds=(100, None), f_ignore_around_peak=3,
-                 fit_noise=True, correction_func=None, correction_params=[],
-                 max_ind=None, subtract_mean=True, edge_power_limit=.05,
-                 normalize=True, amplitude_transfer_func=None,
-                 interp_freqs=None, transfer_func_edges=(None, None)):
+                 noise_bounds=(60, None), fit_noise=True,
+                 correction_func=None, correction_params=[], max_ind=None,
+                 subtract_mean=True, edge_power_limit=.05, normalize=True,
+                 amplitude_transfer_func=None, interp_freqs=None,
+                 transfer_func_edges=(None, None)):
     if (max_ind is None):
         max_ind = np.argmax(interferogram)  # results may vary...
     # phase_corrected_passband = phase_correct_interferogram(
     #     interferogram, max_ind, bin_min_freq, fts_stage_step_size, n_rms_iters,
     #     spike_threshold, poly_order, polyfit=True)
-    if (take_sqrt):
-        interferogram = np.sqrt(interferogram)
     corrected_interferogram = correct_interferogram(
         interferogram, n_rms_iters, spike_threshold, poly_order,
         polyfit=True)
@@ -816,17 +814,23 @@ def plot_band_data(run_num, passbands, band_attrs, average_band, frequencies,
 
 
 def obtain_passbands(
+        # band_num, data_sets, total_good_band_channels, fts_step_size,
+        # fts_frequency_cal, output_vals=False, bin_min_freq=15,
+        # noise_bounds=(60, None), plot_freq_range=None, n_rms_iters=5,
+        # spike_threshold=10, lower_bound=22, upper_bound=35, slope_cut=1e-3,
+        # poly_order=7, end_fit_freq=23, take_sqrt=False,
+        # fit_noise=True, low_snr_cutoff=15, high_snr_change=80,
+        # high_snr_cutoff=1000, plots=True, centroid=None, correction_func=None,
+        # correction_params=[], max_ind=None, subtract_mean=True,
+        # edge_power_limit=.05, normalize=True, x_positions=None,
+        # y_positions=None, apply_freq_correction=False,
+        # apply_amplitude_correction=False, transfer_func_edges=[None, None]):
         band_num, data_sets, total_good_band_channels, fts_step_size,
-        fts_frequency_cal, output_vals=False, bin_min_freq=15,
-        noise_bounds=(60, None), plot_freq_range=None, n_rms_iters=5,
-        spike_threshold=10, lower_bound=22, upper_bound=35, slope_cut=1e-3,
-        poly_order=7, end_fit_freq=23, f_ignore_around_peak=.3, take_sqrt=False,
-        fit_noise=True, low_snr_cutoff=15, high_snr_change=80,
-        high_snr_cutoff=1000, plots=True, centroid=None, correction_func=None,
-        correction_params=[], max_ind=None, subtract_mean=True,
-        edge_power_limit=.05, normalize=True, x_positions=None,
-        y_positions=None, apply_freq_correction=False,
-        apply_amplitude_correction=False, transfer_func_edges=[None, None]):
+        fts_frequency_cal, output_vals=False, plot_freq_range=None,
+        low_snr_cutoff=15, high_snr_change=80, plots=True, centroid=None
+        x_positions=None, y_positions=None, apply_freq_correction=False,
+        apply_amplitude_correction=False, transfer_func_edges=[None, None],
+        **passband_kwargs):
     average_bands = []
     total_passbands = []
     total_band_attrs = []
@@ -869,19 +873,22 @@ def obtain_passbands(
             interferogram = data_set[:, channel]
             passband, center_freq, bin_width, snr, low_edge, upper_edge, frequencies = get_passband(
                 interferogram, fts_step_size, frequency_calibration_factor,
-                n_rms_iters=n_rms_iters,
-                spike_threshold=spike_threshold, bin_min_freq=bin_min_freq,
-                lower_bound=lower_bound, upper_bound=upper_bound,
-                take_sqrt=take_sqrt, slope_cut=slope_cut, poly_order=poly_order,
-                end_fit_freq=end_fit_freq, noise_bounds=noise_bounds,
-                f_ignore_around_peak=f_ignore_around_peak, fit_noise=fit_noise,
-                correction_func=correction_func,
-                correction_params=correction_params,
-                max_ind=max_ind, subtract_mean=subtract_mean,
-                edge_power_limit=edge_power_limit, normalize=normalize,
-                interp_freqs=common_frequencies,
-                amplitude_transfer_func=amplitude_transfer_func,
-                transfer_func_edges=transfer_func_edges)
+                amplitude_transer_func=amplitude_transfer_func,
+                interp_freqs=common_frequencies, **passband_kwargs)
+
+            # n_rms_iters=n_rms_iters,
+            # spike_threshold=spike_threshold, bin_min_freq=bin_min_freq,
+            # lower_bound=lower_bound, upper_bound=upper_bound,
+            # take_sqrt=take_sqrt, slope_cut=slope_cut, poly_order=poly_order,
+            # end_fit_freq=end_fit_freq, noise_bounds=noise_bounds,
+            # f_ignore_around_peak=f_ignore_around_peak, fit_noise=fit_noise,
+            # correction_func=correction_func,
+            # correction_params=correction_params,
+            # max_ind=max_ind, subtract_mean=subtract_mean,
+            # edge_power_limit=edge_power_limit, normalize=normalize,
+            # interp_freqs=common_frequencies,
+            # amplitude_transfer_func=amplitude_transfer_func,
+            # transfer_func_edges=transfer_func_edges)
 
             # Add a cut for SNR here.
             if passband is not None and (
@@ -1556,16 +1563,8 @@ def get_centroid_response(run_num, band_num, total_good_channels, array_data,
 
     average_attrs = []
     for i, (attrs, average) in enumerate(zip(total_attrs, total_averages)):
-        # average_center_freq, lower_limit, upper_limit = return_cent(
-        #     average, frequencies, lower_bound, upper_bound, 1e-10,
-        #     -1, [0], plot='False')
-        # average_center_freq /= 1e9
-
-        # average_bandwidth = bandwidth(average, frequencies,
-        #                               lower_limit, upper_limit)
-
-        average_center_freq, average_bandwidth, lower_edge, upper_edge = get_band_attrs(average, frequencies, lower_bound, upper_bound,
-                                                                                        1e-10)
+        average_center_freq, average_bandwidth, lower_edge, upper_edge = get_band_attrs(
+            average, frequencies, lower_bound, upper_bound, 1e-10)
 
         average_attrs.append([average_center_freq, average_bandwidth,
                               lower_edge, upper_edge])
