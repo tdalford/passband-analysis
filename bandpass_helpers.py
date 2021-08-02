@@ -649,9 +649,11 @@ def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
     # phase_corrected_passband = phase_correct_interferogram(
     #     interferogram, max_ind, bin_min_freq, fts_stage_step_size, n_rms_iters,
     #     spike_threshold, poly_order, polyfit=True)
+    if (take_sqrt):
+        interferogram = np.sqrt(interferogram)
     corrected_interferogram = correct_interferogram(
         interferogram, n_rms_iters, spike_threshold, poly_order,
-        take_sqrt=take_sqrt, polyfit=True)
+        polyfit=True)
 
     window = make_triangle_window(corrected_interferogram)
     phase_corrected_passband = invert_interferogram(corrected_interferogram,
