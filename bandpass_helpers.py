@@ -60,11 +60,9 @@ def despike_timeseries(timestream, threshold):
 
 # maybe try adding a stat that also tries other parts of the bands...
 # not really sure about this though..
-def get_cut_stat(data, fourier_band_filter, out_of_band_filter,
-                 take_sqrt=False):
+def get_cut_stat_new(data, fourier_band_filter, out_of_band_filter):
     if np.std(data) > 1e-4:
-        interferogram = get_cleaned_interferogram(data, 5, 10, 7,
-                                                  take_sqrt=take_sqrt)
+        interferogram = get_cleaned_interferogram(data, 5, 10, 7)
 
         # Just take a conv between the filter of ones and our data I guess...
         signal_stat = np.mean(interferogram[fourier_band_filter]).real
@@ -92,7 +90,7 @@ def correct_interferogram(data, n_rms_iters, spike_threshold, poly_order,
 
 
 def get_cleaned_interferogram(data, n_rms_iters, spike_threshold, poly_order,
-                              plot=False, polyfit=False, take_sqrt=False):
+                              plot=False, polyfit=False, take_sqrt=True):
     if (take_sqrt):
         data = np.sqrt(data)
     corrected_interferogram = correct_interferogram(
@@ -283,19 +281,27 @@ def divide_by_nonmax_mean(arr):
 
 
 def find_interferograms_clean(data, fourier_band_filters, fourier_noise_filter,
-                              spike_threshold, take_sqrt=False):
+                              spike_threshold):
     n_chans = np.shape(data)[1]
     n_bands = len(fourier_band_filters)
     total_cut_stats = np.zeros((n_chans, n_bands))
 
     for i in range(n_chans):
         if (np.std(data[:, i]) > 1e-4):
-            cut_stats = [get_cut_stat(data[:, i], f, fourier_noise_filter,
-                                      take_sqrt=take_sqrt)
+            # despike the channel under consideration
+            # tmp = despike_timeseries(np.sqrt(data[:, i]), spike_threshold)
+            # tmp = despike_timeseries(tmp, spike_threshold)
+            # filter in fourier space
+            cut_stats = [get_cut_stat_new(data[:, i], f, fourier_noise_filter)
                          for f in fourier_band_filters]
             # divide by the mean of the cut stats that didn't make it
             cut_stats = list(divide_by_nonmax_mean(np.array(cut_stats)))
             total_cut_stats[i] = cut_stats
+            # print(cut_stats)
+            # total_cut_stats.append(cut_stats)
+
+            # cut_stat_combined = np.sqrt(np.sum(cut_stats ** 2))
+            # cut_stats_combined.append(cut_stat_combined)
 
     # normalize each cut statistic relative to itimeseries spike rejected rms
     total_cut_stats = np.array(total_cut_stats)
@@ -304,8 +310,7 @@ def find_interferograms_clean(data, fourier_band_filters, fourier_noise_filter,
     return (total_cut_stats.T, cut_stats_combined)
 
 
-def band_classifier(cut_stats):
-    # get the best cut stat
+def band_classifier_new(cut_stats):
     return np.max(cut_stats, axis=0), np.argmax(cut_stats, axis=0)
 
 
@@ -636,11 +641,11 @@ def slope_function(x, y, start, stop, exp_slope=1, side='right'):
 
 
 def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
-                 n_rms_iters=5, spike_threshold=10, take_sqrt=False,
-                 bin_min_freq=15, lower_bound=22., upper_bound=35.,
-                 slope_cut=1e-3, poly_order=5, end_fit_freq=23,
-                 noise_bounds=(100, None), f_ignore_around_peak=3,
-                 fit_noise=True, correction_func=None, correction_params=[],
+                 n_rms_iters=5, spike_threshold=10, bin_min_freq=15,
+                 lower_bound=22., upper_bound=35., slope_cut=1e-3,
+                 poly_order=5, end_fit_freq=23, noise_bounds=(100, None),
+                 f_ignore_around_peak=3, fit_noise=True,
+                 correction_func=None, correction_params=[],
                  max_ind=None, subtract_mean=True, edge_power_limit=.05,
                  normalize=True, amplitude_transfer_func=None,
                  interp_freqs=None, transfer_func_edges=(None, None)):
@@ -650,8 +655,7 @@ def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
     #     interferogram, max_ind, bin_min_freq, fts_stage_step_size, n_rms_iters,
     #     spike_threshold, poly_order, polyfit=True)
     corrected_interferogram = correct_interferogram(
-        interferogram, n_rms_iters, spike_threshold, poly_order,
-        take_sqrt=take_sqrt, polyfit=True)
+        interferogram, n_rms_iters, spike_threshold, poly_order, polyfit=True)
 
     window = make_triangle_window(corrected_interferogram)
     phase_corrected_passband = invert_interferogram(corrected_interferogram,
@@ -818,9 +822,9 @@ def obtain_passbands(
         fts_frequency_cal, output_vals=False, bin_min_freq=15,
         noise_bounds=(60, None), plot_freq_range=None, n_rms_iters=5,
         spike_threshold=10, lower_bound=22, upper_bound=35, slope_cut=1e-3,
-        poly_order=7, end_fit_freq=23, f_ignore_around_peak=.3, take_sqrt=False,
-        fit_noise=True, low_snr_cutoff=15, high_snr_change=80,
-        high_snr_cutoff=1000, plots=True, centroid=None, correction_func=None,
+        poly_order=7, end_fit_freq=23, f_ignore_around_peak=.3, fit_noise=True,
+        low_snr_cutoff=15, high_snr_change=80, high_snr_cutoff=1000,
+        plots=True, centroid=None, correction_func=None,
         correction_params=[], max_ind=None, subtract_mean=True,
         edge_power_limit=.05, normalize=True, x_positions=None,
         y_positions=None, apply_freq_correction=False,
@@ -835,8 +839,9 @@ def obtain_passbands(
 
         good_run_channels = total_good_band_channels[i][band_num]
         for channel in good_run_channels:
+            interferogram = np.sqrt(data_set[:, channel])
 
-            frequency_calibration_factor = fts_frequency_cal
+            frequency_calibration_factor = fts_frequency_cal  # OLD FACTOR
             amplitude_transfer_func = None
             common_frequencies = None
 
@@ -859,18 +864,24 @@ def obtain_passbands(
                     interferogram, c, fts_step_size, fts_frequency_cal)
 
                 if (apply_amplitude_correction):
+                    # ymax = (fts_step_size * len(interferogram)) * 1000
+                    # print(ymax)
                     # print('applying amplitude correction:')
                     amplitude_transfer_func = get_amplitude_transfer_func(
                         centroid_to_use, pixel_position)
 
+            # print(frequency_calibration_factor)
+
+            # Since the frequencies for each are changed,  we really need to
+            # interpolate so that there is a common set of frequencies...
+
             # change this to use *args and **kwargs-- getting quite long..
-            interferogram = data_set[:, channel]
             passband, center_freq, bin_width, snr, low_edge, upper_edge, frequencies = get_passband(
                 interferogram, fts_step_size, frequency_calibration_factor,
                 n_rms_iters=n_rms_iters,
                 spike_threshold=spike_threshold, bin_min_freq=bin_min_freq,
                 lower_bound=lower_bound, upper_bound=upper_bound,
-                take_sqrt=take_sqrt, slope_cut=slope_cut, poly_order=poly_order,
+                slope_cut=slope_cut, poly_order=poly_order,
                 end_fit_freq=end_fit_freq, noise_bounds=noise_bounds,
                 f_ignore_around_peak=f_ignore_around_peak, fit_noise=fit_noise,
                 correction_func=correction_func,
@@ -1405,6 +1416,38 @@ def get_channel_dict(total_good_band_channels, band_num):
             channel_set_map[channel].append(i)
 
     return channel_set_map
+
+
+def get_AB_channels(total_good_band_channels, array_filename):
+    test = np.genfromtxt(array_filename, skip_header=19,
+                         usecols=(0, 13), dtype=None)
+    channels = []
+    ab_vals = []
+    for pair in test:
+        channels.append(pair[0])
+        ab_vals.append(pair[1].decode('utf-8'))
+    channels = np.array(channels)
+    ab_vals = np.array(ab_vals)
+
+    a_channels = channels[np.where(ab_vals == 'A')]
+    b_channels = channels[np.where(ab_vals == 'B')]
+    total_good_a_channels = []
+    total_good_b_channels = []
+    for dataset in total_good_band_channels:
+        dataset_a = []
+        dataset_b = []
+        for band_channels in dataset:
+            band_a_channels = np.array(list(filter(
+                lambda ch: ch in a_channels, band_channels)))
+            dataset_a.append(band_a_channels)
+
+            band_b_channels = np.array(list(filter(
+                lambda ch: ch in b_channels, band_channels)))
+            dataset_b.append(band_b_channels)
+        total_good_a_channels.append(dataset_a)
+        total_good_b_channels.append(dataset_b)
+    return np.array(total_good_a_channels, dtype='object'), np.array(
+        total_good_b_channels, dtype='object')
 
 
 def get_centroid(total_good_channels, x_positions, y_positions):
