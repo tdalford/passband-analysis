@@ -1,8 +1,7 @@
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-from scipy import optimize
-from scipy import signal
+from scipy import optimize, signal, interpolate
 from sklearn.linear_model import LinearRegression
 from IPython.display import HTML, display
 
@@ -14,7 +13,7 @@ c = 3e8     # speed of light
 # timeseries: timestream
 
 
-def smart_rms(timeseries, n_iters, threshold):
+def smart_rms(timeseries, n_iters, threshold, return_data=False):
     ok = np.where(timeseries == timeseries)  # CAN PROBABLY TAKE THIS OUT
     timeseries = timeseries[ok]
     for _ in range(n_iters):
@@ -24,6 +23,9 @@ def smart_rms(timeseries, n_iters, threshold):
             return (mean_tmp, rms_tmp)
         good = np.where(np.abs(timeseries - mean_tmp) / rms_tmp < threshold)
         timeseries = timeseries[good]
+
+    if return_data:
+        return mean_tmp, rms_tmp, timeseries
     return(mean_tmp, rms_tmp)
 
 
@@ -58,10 +60,11 @@ def despike_timeseries(timestream, threshold):
 
 # maybe try adding a stat that also tries other parts of the bands...
 # not really sure about this though..
-def get_cut_stat_new(data, fourier_band_filter,
-                     out_of_band_filter):
+def get_cut_stat(data, fourier_band_filter, out_of_band_filter,
+                 take_sqrt=False):
     if np.std(data) > 1e-4:
-        interferogram = get_cleaned_interferogram(data, 5, 10, 7)
+        interferogram = get_cleaned_interferogram(data, 5, 10, 7,
+                                                  take_sqrt=take_sqrt)
 
         # Just take a conv between the filter of ones and our data I guess...
         signal_stat = np.mean(interferogram[fourier_band_filter]).real
@@ -89,8 +92,9 @@ def correct_interferogram(data, n_rms_iters, spike_threshold, poly_order,
 
 
 def get_cleaned_interferogram(data, n_rms_iters, spike_threshold, poly_order,
-                              plot=False, polyfit=True):
-    # data = np.sqrt(data)
+                              plot=False, polyfit=False, take_sqrt=False):
+    if (take_sqrt):
+        data = np.sqrt(data)
     corrected_interferogram = correct_interferogram(
         data, n_rms_iters, spike_threshold, poly_order, polyfit=polyfit)
 
@@ -103,29 +107,6 @@ def get_cleaned_interferogram(data, n_rms_iters, spike_threshold, poly_order,
     window = make_triangle_window(centered_interferogram)
     phase_corrected_passband = np.real(invert_interferogram(
         centered_interferogram, window))
-
-    if (plot):
-
-        plt.plot(data)
-        plt.title('square root of initial interferogram')
-        plt.show()
-
-        plt.figure(figsize=(5, 4))
-        plt.plot(despiked_interferogram)
-        plt.title(
-            'timeseries spikes eliminated \n + average baseline subtracted')
-        plt.tight_layout()
-        plt.show()
-
-        if (polyfit):
-            plt.plot(poly_fitted_interferogram)
-            plt.title('polynomial baseline removed')
-            plt.show()
-
-        plt.plot(phase_corrected_passband[0: int(np.ceil(
-            np.size(phase_corrected_passband) / 2))])
-        plt.title('phase corrected spectrum')
-        plt.show()
 
     return phase_corrected_passband[:int(np.ceil(len(
         phase_corrected_passband) / 2))]
@@ -272,7 +253,7 @@ def band_hist_cuts(passbands, band_attrs, attr_index, attr_label, band_label,
     # plt.title('%s %s' % (attr_label, band_label))
     # plt.show()
 
-    plot_colored_hist(indiv_attrs, 20, band_attrs[:, 3], devs=dev_threshold)
+    plot_colored_hist(indiv_attrs, 21, band_attrs[:, 3], devs=dev_threshold)
     plt.title('%s %s Ghz' % (attr_label, band_label))
 
     # print("smart mean: %.3g, smart_rms: %.3g" % (s_avg, s_rms))
@@ -302,27 +283,19 @@ def divide_by_nonmax_mean(arr):
 
 
 def find_interferograms_clean(data, fourier_band_filters, fourier_noise_filter,
-                              spike_threshold):
+                              spike_threshold, take_sqrt=False):
     n_chans = np.shape(data)[1]
     n_bands = len(fourier_band_filters)
     total_cut_stats = np.zeros((n_chans, n_bands))
 
     for i in range(n_chans):
         if (np.std(data[:, i]) > 1e-4):
-            # despike the channel under consideration
-            # tmp = despike_timeseries(np.sqrt(data[:, i]), spike_threshold)
-            # tmp = despike_timeseries(tmp, spike_threshold)
-            # filter in fourier space
-            cut_stats = [get_cut_stat_new(data[:, i], f, fourier_noise_filter)
+            cut_stats = [get_cut_stat(data[:, i], f, fourier_noise_filter,
+                                      take_sqrt=take_sqrt)
                          for f in fourier_band_filters]
             # divide by the mean of the cut stats that didn't make it
             cut_stats = list(divide_by_nonmax_mean(np.array(cut_stats)))
             total_cut_stats[i] = cut_stats
-            # print(cut_stats)
-            # total_cut_stats.append(cut_stats)
-
-            # cut_stat_combined = np.sqrt(np.sum(cut_stats ** 2))
-            # cut_stats_combined.append(cut_stat_combined)
 
     # normalize each cut statistic relative to itimeseries spike rejected rms
     total_cut_stats = np.array(total_cut_stats)
@@ -331,7 +304,8 @@ def find_interferograms_clean(data, fourier_band_filters, fourier_noise_filter,
     return (total_cut_stats.T, cut_stats_combined)
 
 
-def band_classifier_new(cut_stats):
+def band_classifier(cut_stats):
+    # get the best cut stat
     return np.max(cut_stats, axis=0), np.argmax(cut_stats, axis=0)
 
 
@@ -348,9 +322,10 @@ def tanh(x, h, A):
 
 
 def remove_powerlaw_noise(frequencies, spectrum, end_fit_freq,
-                          noise_start_freq, plots=False):
+                          noise_bounds, plots=False):
     end_fit_index = find_freq(frequencies, end_fit_freq)
-    noise_start_index = find_freq(frequencies, noise_start_freq)
+    noise_start_index = find_freq(frequencies, noise_bounds[0])
+    noise_end_index = find_freq(frequencies, noise_bounds[1])
     frequencies = frequencies / 1e9
     # find maximum index
     max_index = np.argmax(spectrum[:end_fit_index])
@@ -379,7 +354,7 @@ def remove_powerlaw_noise(frequencies, spectrum, end_fit_freq,
 
     # make sure otherwise that we're centered at zero
     current_mean = np.mean(spectrum_fitted[end_fit_index - 10: end_fit_index])
-    old_mean = np.mean(spectrum_fitted[noise_start_index:])
+    old_mean = np.mean(spectrum_fitted[noise_start_index:noise_end_index])
 
     # Now add the mean back so that we don't suddenly hit go to a zero mean!
     spectrum_fitted[max_index:end_fit_index] += (old_mean - current_mean)
@@ -644,20 +619,39 @@ def find_peak(passband, peak_index):
     return (peak_start + 2, peak_index + peak_end)
 
 
+def slope_function(x, y, start, stop, exp_slope=1, side='right'):
+    # make the minimum value a 1
+    assert len(x) == len(y)
+    good_x = np.where((x >= start) & (x <= stop))
+    y = y / np.min(y[good_x])
+    # make the normed value a 1
+    y_sloped = np.ones(len(y))
+    y_sloped[good_x] = y[good_x]
+    # add exponential decay after the right edge now
+    right_edge = good_x[0][-1]
+    y_sloped[(right_edge):] = (np.max(y_sloped) - 1) * np.exp(
+        -1 * exp_slope * (x[(right_edge):] - x[right_edge])) + 1
+
+    return y_sloped
+
+
 def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
-                 n_rms_iters=5, spike_threshold=10, bin_min_freq=15,
-                 lower_bound=22., upper_bound=35., slope_cut=1e-3,
-                 poly_order=5, end_fit_freq=23, noise_start_freq=60,
-                 f_ignore_around_peak=3, fit_noise=True,
-                 ndf_correction_func=None, alpha=None, max_ind=None,
-                 subtract_mean=True, edge_power_limit=.05, normalize=True):
+                 n_rms_iters=5, spike_threshold=10, take_sqrt=False,
+                 bin_min_freq=15, lower_bound=22., upper_bound=35.,
+                 slope_cut=1e-3, poly_order=5, end_fit_freq=23,
+                 noise_bounds=(100, None), f_ignore_around_peak=3,
+                 fit_noise=True, correction_func=None, correction_params=[],
+                 max_ind=None, subtract_mean=True, edge_power_limit=.05,
+                 normalize=True, amplitude_transfer_func=None,
+                 interp_freqs=None, transfer_func_edges=(None, None)):
     if (max_ind is None):
         max_ind = np.argmax(interferogram)  # results may vary...
     # phase_corrected_passband = phase_correct_interferogram(
     #     interferogram, max_ind, bin_min_freq, fts_stage_step_size, n_rms_iters,
     #     spike_threshold, poly_order, polyfit=True)
     corrected_interferogram = correct_interferogram(
-        interferogram, n_rms_iters, spike_threshold, poly_order, polyfit=True)
+        interferogram, n_rms_iters, spike_threshold, poly_order,
+        take_sqrt=take_sqrt, polyfit=True)
 
     window = make_triangle_window(corrected_interferogram)
     phase_corrected_passband = invert_interferogram(corrected_interferogram,
@@ -672,20 +666,42 @@ def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
     passband = phase_corrected_passband[
         0: int(np.ceil(np.size(phase_corrected_passband) / 2))].real
 
+    if noise_bounds[1] is None:
+        noise_bounds = (noise_bounds[0], frequency_hz[-1] / 1e9)
+
     if fit_noise:
-        # plt.plot(frequency_hz / 1e9, passband)
-        # plt.show()
-        # fit a power law to this to reduce noise
+        # fit a power law to this to reduce noise at low freqs
         passband = remove_powerlaw_noise(
             frequency_hz, passband, end_fit_freq,
-            noise_start_freq)
-    if (ndf_correction_func is not None):
-        ndf_correction = ndf_correction_func(frequency_hz, alpha)
-        passband = passband / ndf_correction
+            noise_bounds)
+
+    if (correction_func is not None):  # a multiplicative correction
+        correction = correction_func(frequency_hz, *correction_params)
+        passband = passband * correction
+
+    if (amplitude_transfer_func is not None):  # a multiplicative correction
+        assert transfer_func_edges != [None, None]
+        start, stop = transfer_func_edges
+        correction = slope_function(
+            frequency_hz / 1e9, 1 / amplitude_transfer_func(
+                frequency_hz / 1e9), start, stop, exp_slope=1)
+
+        # plt.plot(frequency_hz / 1e9, amplitude_transfer_func(
+        #     frequency_hz / 1e9))
+        # plt.show()
+
+        # plt.plot(frequency_hz / 1e9, 1 / amplitude_transfer_func(
+        #     frequency_hz / 1e9))
+        # plt.show()
+
+        # plt.plot(frequency_hz / 1e9, correction)
+        # plt.show()
+
+        passband = passband * correction
 
     if (passband is None):
         print('no passband found...')
-        return None, None, None, frequency_hz
+        return None, None, None, None, None, None, frequency_hz
     # passband = phase_corrected_passband.real
 
     # rj_correction = RJ_correction(frequency_hz, h, k, t_lamp, t_ambient)
@@ -693,16 +709,14 @@ def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
     #                              bin_min=bin_min)
 
     # fit out a noise bias term to this passband
-    noise_start_index = find_freq(frequency_hz, noise_start_freq)
+    noise_start_index = find_freq(frequency_hz, noise_bounds[0])
+    noise_end_index = find_freq(frequency_hz, noise_bounds[1])
     # subtract a mean baseline from the band
     if (subtract_mean):
-        passband = passband - np.mean(passband[noise_start_index:])
+        passband = passband - np.mean(passband[
+            noise_start_index:noise_end_index])
     if (normalize):
         passband = normalize_passband(passband, lower_index=bin_min)
-
-    # if fit_noise:
-    #     phase_corrected_passband = remove_powerlaw_noise(
-    #         frequency_hz, passband, end_fit_freq, noise_start_freq)
 
     # calculate the band center and bandwidth and edges
     cf, bw, lower_edge, upper_edge = get_band_attrs(
@@ -711,8 +725,19 @@ def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
     cf = np.floor(cf*100)/100.
     bw = np.floor(bw*100)/100.
 
+    if (lower_edge is None):
+        print('lower edge not fitted...')
+        return None, None, None, None, None, None, frequency_hz
+
+    # should interpolate after we get the attrs
+    if (interp_freqs is not None):
+        interpolation_func = interpolate.interp1d(
+            frequency_hz, passband, fill_value='extrapolate')
+
+        passband = interpolation_func(interp_freqs)
+        frequency_hz = interp_freqs
+
     # calculate the SNR
-    noise_start_index = find_freq(frequency_hz, noise_start_freq)
     snr = np.around(1 / np.std(passband[noise_start_index:]), decimals=1)
     return passband, cf, bw, snr, lower_edge, upper_edge, frequency_hz
 
@@ -741,7 +766,7 @@ def plot_indiv_bands(ax, passbands, band_attrs, frequencies, bin_min_freq,
         return
     for attrs, passband in zip(band_attrs, passbands):
         ax.plot(frequencies / 1e9, passband, linewidth=0.5,
-                label='%d, %.3g, %.3g, %.3g %.1f %.1f' % tuple(attrs))
+                label='%d, %.3g, %.3g, %.3g, %.1f, %.1f' % tuple(attrs))
     ax.legend(loc='upper left', bbox_to_anchor=(0, -.1))
     ax.set_xlim(plot_freq_range[0], plot_freq_range[1])
 
@@ -752,7 +777,7 @@ def plot_band_data(run_num, passbands, band_attrs, average_band, frequencies,
     fig, axes = plt.subplots(1, 3, figsize=(15, 6))
     for attrs, passband in zip(band_attrs, passbands):
         axes[0].plot(frequencies / 1e9, passband, linewidth=0.5,
-                     label='%d, %.3g, %.3g, %.3g %.1f %.1f' % tuple(attrs))
+                     label='%d, %.3g, %.3g, %.3g, %.1f, %.1f' % tuple(attrs))
 
     average_passband = average_band / np.max(average_band[bin_min:])
     # plt.plot(frequency_Hz[bin_min:]/1e9, RJ_corr[bin_min:])
@@ -790,49 +815,71 @@ def plot_band_data(run_num, passbands, band_attrs, average_band, frequencies,
 
 def obtain_passbands(
         band_num, data_sets, total_good_band_channels, fts_step_size,
-        fts_frequency_cal, t_lamp, t_ambient, output_vals=False,
-        bin_min_freq=15, noise_start_freq=80, plot_freq_range=None,
-        n_rms_iters=5, spike_threshold=10, lower_bound=22, upper_bound=35,
-        slope_cut=1e-3, poly_order=7, end_fit_freq=23, f_ignore_around_peak=.3,
-        fit_noise=True, apply_RJ_correction=False, low_snr_cutoff=15,
-        high_snr_change=80, high_snr_cutoff=1000, plots=True, centroid=None,
-        ndf_correction_func=None, alpha=None, max_ind=None,
-        subtract_mean=True, edge_power_limit=.05, normalize=True):
+        fts_frequency_cal, output_vals=False, bin_min_freq=15,
+        noise_bounds=(60, None), plot_freq_range=None, n_rms_iters=5,
+        spike_threshold=10, lower_bound=22, upper_bound=35, slope_cut=1e-3,
+        poly_order=7, end_fit_freq=23, f_ignore_around_peak=.3, take_sqrt=False,
+        fit_noise=True, low_snr_cutoff=15, high_snr_change=80,
+        high_snr_cutoff=1000, plots=True, centroid=None, correction_func=None,
+        correction_params=[], max_ind=None, subtract_mean=True,
+        edge_power_limit=.05, normalize=True, x_positions=None,
+        y_positions=None, apply_freq_correction=False,
+        apply_amplitude_correction=False, transfer_func_edges=[None, None]):
     average_bands = []
     total_passbands = []
     total_band_attrs = []
+    frequencies = None
     for i, data_set in enumerate(data_sets):
         passbands = []
         band_attrs = []
-        for channel in total_good_band_channels[i][band_num]:
-            # interferogram = np.sqrt(data_set[:, channel])
-            interferogram = data_set[:, channel]
 
-            frequency_calibration_factor = fts_frequency_cal  # OLD FACTOR
-            if (centroid is not None):
+        good_run_channels = total_good_band_channels[i][band_num]
+        for channel in good_run_channels:
+
+            frequency_calibration_factor = fts_frequency_cal
+            amplitude_transfer_func = None
+            common_frequencies = None
+
+            if (apply_freq_correction):
+                # only use the centroid calibration if we have enough channels
+                # to begin with
+                if centroid is None:
+                    centroid_to_use = get_centroid(
+                        good_run_channels, x_positions, y_positions)
+                else:
+                    centroid_to_use = centroid
+
                 pixel_position = get_pixel_position(channel, x_positions,
                                                     y_positions)
-                frequency_calibration_factor = get_calibration_factor(
-                    centroid, pixel_position)
+                frequency_calibration_factor = get_frequency_calibration_factor(
+                    centroid_to_use, pixel_position)
 
-            # print(frequency_calibration_factor) applying the calibration
-            # factor will be a little harder since it will change the set of
-            # interpolation frequncies..
+                # set a common set of frequencies for this
+                common_frequencies = frequency(
+                    interferogram, c, fts_step_size, fts_frequency_cal)
 
-            # Since the frequencies for each are changed.  We really need to
-            # interpolate so that there is a common set of frequencies...
+                if (apply_amplitude_correction):
+                    # print('applying amplitude correction:')
+                    amplitude_transfer_func = get_amplitude_transfer_func(
+                        centroid_to_use, pixel_position)
+
+            # change this to use *args and **kwargs-- getting quite long..
+            interferogram = data_set[:, channel]
             passband, center_freq, bin_width, snr, low_edge, upper_edge, frequencies = get_passband(
                 interferogram, fts_step_size, frequency_calibration_factor,
-                t_lamp, t_ambient, n_rms_iters=n_rms_iters,
+                n_rms_iters=n_rms_iters,
                 spike_threshold=spike_threshold, bin_min_freq=bin_min_freq,
                 lower_bound=lower_bound, upper_bound=upper_bound,
-                slope_cut=slope_cut, poly_order=poly_order,
-                end_fit_freq=end_fit_freq, noise_start_freq=noise_start_freq,
+                take_sqrt=take_sqrt, slope_cut=slope_cut, poly_order=poly_order,
+                end_fit_freq=end_fit_freq, noise_bounds=noise_bounds,
                 f_ignore_around_peak=f_ignore_around_peak, fit_noise=fit_noise,
-                apply_RJ_correction=apply_RJ_correction,
-                ndf_correction_func=ndf_correction_func, alpha=alpha,
+                correction_func=correction_func,
+                correction_params=correction_params,
                 max_ind=max_ind, subtract_mean=subtract_mean,
-                edge_power_limit=edge_power_limit, normalize=normalize)
+                edge_power_limit=edge_power_limit, normalize=normalize,
+                interp_freqs=common_frequencies,
+                amplitude_transfer_func=amplitude_transfer_func,
+                transfer_func_edges=transfer_func_edges)
 
             # Add a cut for SNR here.
             if passband is not None and (
@@ -1349,36 +1396,15 @@ def get_repeats(total_good_band_channels, band_num, ch=None):
     return max_channel, channel_set_map[max_channel]
 
 
-def get_AB_channels(total_good_band_channels, array_filename):
-    test = np.genfromtxt(array_filename, skip_header=19,
-                         usecols=(0, 13), dtype=None)
-    channels = []
-    ab_vals = []
-    for pair in test:
-        channels.append(pair[0])
-        ab_vals.append(pair[1].decode('utf-8'))
-    channels = np.array(channels)
-    ab_vals = np.array(ab_vals)
+def get_channel_dict(total_good_band_channels, band_num):
+    channel_set_map = {}
+    for i, data_set in enumerate(total_good_band_channels):
+        for channel in data_set[band_num]:
+            if channel not in channel_set_map.keys():
+                channel_set_map[channel] = []
+            channel_set_map[channel].append(i)
 
-    a_channels = channels[np.where(ab_vals == 'A')]
-    b_channels = channels[np.where(ab_vals == 'B')]
-    total_good_a_channels = []
-    total_good_b_channels = []
-    for dataset in total_good_band_channels:
-        dataset_a = []
-        dataset_b = []
-        for band_channels in dataset:
-            band_a_channels = np.array(list(filter(
-                lambda ch: ch in a_channels, band_channels)))
-            dataset_a.append(band_a_channels)
-
-            band_b_channels = np.array(list(filter(
-                lambda ch: ch in b_channels, band_channels)))
-            dataset_b.append(band_b_channels)
-        total_good_a_channels.append(dataset_a)
-        total_good_b_channels.append(dataset_b)
-    return np.array(total_good_a_channels, dtype='object'), np.array(
-        total_good_b_channels, dtype='object')
+    return channel_set_map
 
 
 def get_centroid(total_good_channels, x_positions, y_positions):
@@ -1396,68 +1422,112 @@ def get_pixel_position(channel, x_positions, y_positions):
     return get_centroid([channel], x_positions, y_positions)
 
 
-def calibration_func(y_pos):
-    a = .0585
-    b = .050
-    return a * y_pos + (b + 1)
+# def frequency_calibration_func(x_pos, y_pos):
+#     a = .0585
+#     b = .050
+#     # right now this is unaffected by the x position
+#     return a * y_pos + (b + 1)
 
 
-def amplitude_func(centroid, pixel_position):
-    pass
+def frequency_calibration_func(x_pos, y_pos):
+    # fitted from mathematica. y_pos is in mm!
+    a, b, c, d = (1.055031284080443, 0.0009717425200561042,
+                  -0.000010387751028142605,  -6.163499394928664e-7)
+
+    # we only care about the y position for now.
+    return (a + b * y_pos + c * y_pos ** 2 + d * y_pos ** 3) * (1.0239 / 1.055)
 
 
-def get_calibration_factor(centroid, pixel_position):
-    # right now we only care about the y difference
-    y_difference = 5 * (pixel_position[0] - centroid[0]) / 25.1
+def find_closest_pixel_pair(x, y, pairs):
+    # go smallest in total distance apart
+    return min(pairs, key=lambda pair: np.sqrt(
+        np.sum(np.subtract(pair, [x, y]) ** 2)))
 
-    # We also need to apply a callibration factor depending on the amplitude
-    # over all frequencies
-    amplitudes = amplitude_func(centroid, pixel_position)
 
-    return calibration_func(y_difference)
+def amplitude_transfer_func(x_pos, y_pos, order=7):
+    # load in the correction file containing all the corrections.
+    correction_file = np.load('amp_correction_z_0_35.npz', 'wb')
+    # data should be an array who has a (x, y) pair for location, each of which
+    # has an amplitude correction.
+    amplitudes = correction_file['amplitudes']
+    pairs = correction_file['pairs']
+    frequencies = correction_file['frequencies']
+
+    # get the xy pair closest to ours
+    # print(x_pos, y_pos)
+    closest_pair = find_closest_pixel_pair(x_pos, y_pos, pairs)
+    # print(closest_pair)
+    pair_index = np.where(pairs == closest_pair)[0][0]
+
+    # divide by the maximum to roughly normalize.
+    amplitudes[pair_index] /= np.max(amplitudes[pair_index])
+    poly_params = np.polyfit(frequencies, amplitudes[pair_index], order)
+    poly_fitted_amplitudes = np.polyval(poly_params, frequencies)
+
+    # want a function that will output frequency -> amplitude
+    transfer_func = interpolate.interp1d(frequencies, poly_fitted_amplitudes,
+                                         fill_value='extrapolate')
+    return transfer_func
+
+
+def get_frequency_calibration_factor(centroid, pixel_position):
+    # these are flipped with respect to what we have in the FTS sims!
+    x_difference = (pixel_position[1] - centroid[1])
+    y_difference = (pixel_position[0] - centroid[0])
+    return frequency_calibration_func(x_difference, y_difference)
+
+
+def get_amplitude_transfer_func(centroid, pixel_position):
+    # these are flipped with respect to what we have in the FTS sims!
+    y_difference = (pixel_position[0] - centroid[0])
+    x_difference = (pixel_position[1] - centroid[1])
+    return amplitude_transfer_func(x_difference, y_difference)
 
 
 def get_amplitudes(data_sets, channels):
     amps = []
     for data_set in data_sets:
         for channel in channels:
-            print(channel)
+            # print(channel)
             interferogram = np.sqrt(data_set[:, channel])
             amps.append(np.max(interferogram))
 
-    print(np.array(amps))
+    # print(np.array(amps))
     test = np.array(amps) / 1e7
-    print(test)
+    # print(test)
     return test
 
 
-def plot_centroid_response(run_num, band_num, total_good_channels, array_data,
-                           x_locs, y_locs, *passband_args, **passband_kwargs):
+def get_centroid_response(run_num, band_num, total_good_channels, array_data,
+                          x_locs, y_locs, *passband_args,
+                          **passband_kwargs):
     good_channels = total_good_channels[run_num][band_num]
     good_x = x_locs[good_channels]
     good_y = y_locs[good_channels]
     good_points = np.array([good_x, good_y]).T
     if len(good_points) == 0:
-        return
+        return None, None
 
     centroid = np.sum(good_points, axis=0) / len(good_points)
     # now plot top half, bottom half, left half, right half
     bottom_half = np.where(good_points[:, 1] < centroid[1])
     top_half = np.where(good_points[:, 1] >= centroid[1])
 
-    print(good_channels[top_half])
-    plt.scatter(good_x[top_half], good_y[top_half], c='green',
-                s=get_amplitudes([array_data[run_num]], good_channels[top_half]))
-    plt.scatter(good_x[bottom_half], good_y[bottom_half], c='red',
-                s=get_amplitudes([array_data[run_num]], good_channels[bottom_half]))
-    plt.show()
+    # print(good_channels[top_half])
+    if passband_kwargs['plots']:
+        plt.scatter(good_x[top_half], good_y[top_half], c='green',
+                    s=get_amplitudes([array_data[run_num]], good_channels[top_half]))
+        plt.scatter(good_x[bottom_half], good_y[bottom_half], c='red',
+                    s=get_amplitudes([array_data[run_num]], good_channels[bottom_half]))
+        plt.show()
 
     left_half = np.where(good_points[:, 0] < centroid[0])
     right_half = np.where(good_points[:, 0] >= centroid[0])
 
-    plt.scatter(good_x[left_half], good_y[left_half], c='red')
-    plt.scatter(good_x[right_half], good_y[right_half], c='green')
-    plt.show()
+    if passband_kwargs['plots']:
+        plt.scatter(good_x[left_half], good_y[left_half], c='red')
+        plt.scatter(good_x[right_half], good_y[right_half], c='green')
+        plt.show()
 
     total_averages = []
     total_attrs = []
@@ -1471,8 +1541,10 @@ def plot_centroid_response(run_num, band_num, total_good_channels, array_data,
             band_num, [array_data[run_num]],
             [[good_channels[split], good_channels[split]]], *passband_args,
             centroid=centroid, **passband_kwargs)
-        if len(passbands[0]) <= 2:
-            return
+        # if there's only 1 point on each side, we don't have enough info
+        # to make a reasonable estimate.
+        if len(passbands[0]) <= 0:
+            return None, None
 
         average_bands[0] /= np.max(average_bands[0])
         total_averages.append(average_bands[0])
@@ -1482,27 +1554,43 @@ def plot_centroid_response(run_num, band_num, total_good_channels, array_data,
 
     average_attrs = []
     for i, (attrs, average) in enumerate(zip(total_attrs, total_averages)):
-        average_center_freq, lower_limit, upper_limit = return_cent(
-            average, frequencies, lower_bound, upper_bound, 1e-10,
-            -1, [0], plot='False')
-        average_center_freq /= 1e9
+        # average_center_freq, lower_limit, upper_limit = return_cent(
+        #     average, frequencies, lower_bound, upper_bound, 1e-10,
+        #     -1, [0], plot='False')
+        # average_center_freq /= 1e9
 
-        average_bandwidth = bandwidth(average, frequencies,
-                                      lower_limit, upper_limit)
-        average_attrs.append([average_center_freq, average_bandwidth])
+        # average_bandwidth = bandwidth(average, frequencies,
+        #                               lower_limit, upper_limit)
 
-        print(attrs[0][:, 1])
-        average_center_freq = np.mean(np.array(attrs)[0][:, 1])
-        average_bandwidth = np.mean(np.array(attrs)[0][:, 2])
+        average_center_freq, average_bandwidth, lower_edge, upper_edge = get_band_attrs(average, frequencies, lower_bound, upper_bound,
+                                                                                        1e-10)
 
-        plt.plot(frequencies / 1e9, average, label='%s: %.1f %.1f' % (
-            labels[i], average_center_freq, average_bandwidth))
+        average_attrs.append([average_center_freq, average_bandwidth,
+                              lower_edge, upper_edge])
+
+        # print(attrs[0][:, 1])
+        # snrs = np.array(attrs[0][:, 3]) ** 2
+        # average_center_freq = np.average(
+        #     np.array(attrs)[0][:, 1], weights=snrs)
+        # average_bandwidth = np.average(np.array(attrs)[0][:, 2], weights=snrs)
+        # average_low_edge, _ = smart_rms(
+        #     np.array(attrs)[0][:, 4], 4, 2)
+        # average_upper_edge, _ = smart_rms(
+        #     np.array(attrs)[0][:, 5], 4, 2)
+        # average_attrs.append([average_center_freq, average_bandwidth,
+        #                       average_low_edge, average_upper_edge])
+
+        if passband_kwargs['plots']:
+            plt.plot(frequencies / 1e9, average, label='%s: %.1f %.1f' % (
+                labels[i], average_center_freq, average_bandwidth))
+            print(average_center_freq, average_bandwidth)
+
+    if passband_kwargs['plots']:
         plt.legend()
-
-    plt.title('centers and widths over portions of the array for run %s' % (
-        run_num))
-    plt.show()
-    return np.array(average_attrs)
+        plt.title('centers and widths over portions of the array'
+                  'for run %s' % (run_num))
+        plt.show()
+    return np.array(average_attrs), total_attrs
 
 
 def get_band_edges_manually(passband, limit=.05):
@@ -1546,6 +1634,7 @@ def fit_band_edge(frequencies, passband, edge_guess_ind, plot=False,
         plt.plot(fit_x, fit_y)
         plt.axvline(closest_root)
         plt.show()
+    # if the fitis really off, just return the earlier guess.
     if (closest_root) < 0 or closest_root > 300 or np.abs(
             frequencies[edge_guess_ind] - closest_root) > 4:
         return edge_guess_ind
@@ -1554,8 +1643,176 @@ def fit_band_edge(frequencies, passband, edge_guess_ind, plot=False,
 
 def get_band_edges(frequencies, passband, limit=.05, plot=False):
     # make sure this band is normalized.
-    assert np.max(passband) == 1
-    start, end = get_band_edges_manually(passband, limit=limit)
-    low_edge = fit_band_edge(frequencies / 1e9, passband, start, plot=plot)
-    upper_edge = fit_band_edge(frequencies / 1e9, passband, end, plot=plot)
+    if np.max(passband) != 1:
+        return None, None
+
+    try:
+        start, end = get_band_edges_manually(passband, limit=limit)
+        low_edge = fit_band_edge(frequencies / 1e9, passband, start, plot=plot)
+        upper_edge = fit_band_edge(frequencies / 1e9, passband, end, plot=plot)
+    except IndexError:
+        return None, None
     return low_edge, upper_edge
+
+
+def score_fit(data_portion, expected_portion):
+    residual = data_portion - expected_portion
+    # minimizethe residual
+    score = np.sum(np.abs(residual))
+    return score
+
+
+def get_band_rolloff_frequencies(frequencies, passband, expected_rolloff):
+    # take a chunk of the rolloff
+    min_score = np.inf  # maybe only do this for a portion
+    min_index = None
+    for i in range(len(frequencies) - len(expected_rolloff)):
+        # get the portion of our data that we want to fit
+        data_portion = passband[i: i + len(expected_rolloff)]
+        score = score_fit(data_portion, expected_rolloff)
+        if (score < min_score):
+            min_index = i
+            min_score = score
+    return (frequencies[min_index: min_index + len(expected_rolloff)],
+            passband[min_index: min_index + len(expected_rolloff)], min_score)
+
+
+def save_center_and_width(
+        attrs, array_label, band_label, save_dir='centers_and_widths',
+        fname='take1', start_file=True):
+    center_mean, center_dev = weighted_rms(
+        attrs['total_band_data']['attrs'][:, 1],
+        attrs['total_band_data']['attrs'][:, 3] ** 2)
+
+    width_mean, width_dev = weighted_rms(
+        attrs['total_band_data']['attrs'][:, 2],
+        attrs['total_band_data']['attrs'][:, 3] ** 2)
+
+    open_arg = 'a'
+    if (start_file):
+        open_arg = 'w'
+    with open(save_dir + '/%s.csv' % fname, open_arg) as fd:
+        if (start_file):
+            fd.write('Array, Band, Center (Ghz), Width (Ghz)')
+        fd.write('\n %s, %s, %.1f $\\pm$ %.1f, %.1f $\\pm$ %.1f' % (
+            array_label, band_label, center_mean, center_dev, width_mean,
+            width_dev))
+
+
+def plot_chunk_hists(chunk_attrs, attr_labels, write_data=False,
+                     start_file=False, save_dir='', fname='', array_label='',
+                     band_label='', corrected=False):
+    save_data = []
+    labels = ['top half', 'bottom half', 'left half', 'right half']
+    m, n = (3, 2)
+    for value in range(len(attr_labels)):
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+
+        for i, (m, n) in enumerate([[3, 2], [1, 0]]):
+            data = np.array(chunk_attrs)[:, m, value] - np.array(chunk_attrs)[
+                :, n, value]
+            mean, rms, data = smart_rms(data, 2, 3, return_data=True)
+            axes[i].hist(data, label=r'%.2f $\pm$ %.2f' % (
+                mean, rms))
+            axes[i].legend()
+            axes[i].set_title('%s %s - %s %s' % (
+                labels[m], attr_labels[value], labels[n], attr_labels[value]))
+            axes[i].grid()
+            # only save the right - left data
+            if (m, n) == (3, 2):
+                save_data.append([mean, rms])
+            # plt.show()
+
+    # now save this data to a file
+    if not write_data:
+        return
+    open_arg = 'a'
+    if (start_file):
+        open_arg = 'w'
+    with open(save_dir + '/%s.csv' % fname, open_arg) as fd:
+        if (start_file):
+            fd.write('Array, Band, Attr, Mean (Ghz), RMS (Ghz), Corrected?')
+
+        # now loop through and save all of our data.
+        for ((mean, rms), attr_label) in zip(save_data, attr_labels):
+            fd.write('\n %s, %s, %s, %.2f, %.2f, %s' % (
+                array_label, band_label, attr_label, mean, rms, corrected))
+
+    return save_data
+
+
+def spatial_variation(attr_data, x_positions, y_positions, attr_index):
+    # list of channels, centers, widths, snrs, edges, bands itself?
+    all_attrs = attr_data['total_band_data']['attrs']
+    x_rounded = np.round(x_positions, 2)
+    y_rounded = np.round(y_positions, 2)
+    data = []
+    # now for each x position get a list of channels belonging to that position
+    unique_positions = np.unique(np.array([x_rounded, y_rounded]).T, axis=0)
+    for pixel_position in unique_positions:
+        pixel_channels = np.where((x_rounded == pixel_position[0]) & (
+            y_rounded == pixel_position[1]))[0]
+
+        # Now get the bands for these channels and plot them/find the mean
+        # center and width, low and upper edge
+        common_vals, channel_ind, pixel_ind = np.intersect1d(
+            np.asarray(all_attrs[:, 0], dtype='int'), pixel_channels,
+            return_indices=True)
+        pixel_attrs = all_attrs[channel_ind]
+        if (len(pixel_attrs) == 0):
+            data.append(np.nan)
+            continue
+        mean, _ = weighted_rms(pixel_attrs[:, attr_index], pixel_attrs[:, 3])
+        data.append(mean)
+
+    return np.array(data), unique_positions
+
+
+def plot_spatial_variation(attr_data, x_positions, y_positions, attr_index):
+    attrs, poses = spatial_variation(attr_data, x_positions, y_positions,
+                                     attr_index)
+    attr_mean, _ = weighted_rms(
+        attr_data['total_band_data']['attrs'][:, attr_index],
+        attr_data['total_band_data']['attrs'][:, 3])
+    plt.figure(figsize=(8, 5))
+
+    norm = matplotlib.colors.TwoSlopeNorm(vcenter=0)
+    plt.scatter(x_positions, y_positions, s=.1, c='black', alpha=.4)
+    plt.scatter(poses[:, 0], poses[:, 1], c=100 * (
+        attrs - attr_mean) / attr_mean, cmap='RdBu', edgecolors='b', norm=norm)
+    plt.colorbar(label='percent shift')
+    plt.xlabel('y (mm)')
+    plt.ylabel('z (mm)')
+    plt.grid(False)
+
+
+def get_top_repeats(set_map, n=5):
+    ch_array = np.zeros((len(set_map), 2), dtype='int')
+    # first get an array with ch, # of channels
+    for i, ch in enumerate(set_map.keys()):
+        ch_array[i] = [ch, len(set_map[ch])]
+    return ch_array[np.argsort(ch_array[:, 1])][::-1][:n][:, 0]
+
+
+def channel_spread(ch, run_indices, all_attrs):
+    plt.figure(figsize=(10, 5))
+    freqs = all_attrs['frequencies']
+    for run in run_indices:
+        channel_ind = np.where(
+            all_attrs['individual_run_data']['attrs'][run][:, 0] == ch)[0]
+        if len(channel_ind) != 1:
+            continue
+        channel_ind = channel_ind[0]
+        passband = all_attrs['individual_run_data']['passbands'][run][channel_ind]
+        center, width, snr, low_edge, upper_edge = all_attrs[
+            'individual_run_data']['attrs'][run][channel_ind][1:]
+        plt.plot(freqs / 1e9, passband, alpha=.8, label='run %s: %.1f %.3g, %.3g %.1f %.1f' % (
+            run, center, width, snr, low_edge, upper_edge))
+
+    # Plot total average band
+    plt.plot(freqs / 1e9, all_attrs['total_average_band'], '--', color='black',
+             label='average band over all detectors', alpha=.8)
+    plt.title('Spread of channel %s bands over various runs (PA4)' % ch)
+    plt.legend(loc='upper left', bbox_to_anchor=(0, -.2))
+    plt.xlabel('frequency (Ghz)')
+    plt.ylabel('normalized passband amplitude')
