@@ -649,6 +649,8 @@ def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
     # phase_corrected_passband = phase_correct_interferogram(
     #     interferogram, max_ind, bin_min_freq, fts_stage_step_size, n_rms_iters,
     #     spike_threshold, poly_order, polyfit=True)
+    if (take_sqrt):
+        interferogram = np.sqrt(interferogram)
     corrected_interferogram = correct_interferogram(
         interferogram, n_rms_iters, spike_threshold, poly_order,
         polyfit=True)
@@ -680,7 +682,7 @@ def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
         passband = passband * correction
 
     if (amplitude_transfer_func is not None):  # a multiplicative correction
-        assert transfer_func_edges != [None, None]
+        assert tuple(transfer_func_edges) != (None, None)
         start, stop = transfer_func_edges
         correction = slope_function(
             frequency_hz / 1e9, 1 / amplitude_transfer_func(
@@ -826,11 +828,11 @@ def obtain_passbands(
         # y_positions=None, apply_freq_correction=False,
         # apply_amplitude_correction=False, transfer_func_edges=[None, None]):
         band_num, data_sets, total_good_band_channels, fts_step_size,
-        fts_frequency_cal, output_vals=False, plot_freq_range=None,
-        low_snr_cutoff=15, high_snr_change=80, plots=True, centroid=None
-        x_positions=None, y_positions=None, apply_freq_correction=False,
-        apply_amplitude_correction=False, transfer_func_edges=[None, None],
-        **passband_kwargs):
+        fts_frequency_cal, output_vals=False, bin_min_freq=15,
+        plot_freq_range=None, low_snr_cutoff=15, high_snr_change=80,
+        high_snr_cutoff=1000, plots=True, centroid=None, x_positions=None,
+        y_positions=None, apply_freq_correction=False,
+        apply_amplitude_correction=False, **passband_kwargs):
     average_bands = []
     total_passbands = []
     total_band_attrs = []
@@ -845,6 +847,7 @@ def obtain_passbands(
             frequency_calibration_factor = fts_frequency_cal
             amplitude_transfer_func = None
             common_frequencies = None
+            interferogram = data_set[:, channel]
 
             if (apply_freq_correction):
                 # only use the centroid calibration if we have enough channels
@@ -865,16 +868,15 @@ def obtain_passbands(
                     interferogram, c, fts_step_size, fts_frequency_cal)
 
                 if (apply_amplitude_correction):
-                    # print('applying amplitude correction:')
                     amplitude_transfer_func = get_amplitude_transfer_func(
                         centroid_to_use, pixel_position)
 
             # change this to use *args and **kwargs-- getting quite long..
-            interferogram = data_set[:, channel]
             passband, center_freq, bin_width, snr, low_edge, upper_edge, frequencies = get_passband(
                 interferogram, fts_step_size, frequency_calibration_factor,
-                amplitude_transer_func=amplitude_transfer_func,
-                interp_freqs=common_frequencies, **passband_kwargs)
+                amplitude_transfer_func=amplitude_transfer_func,
+                interp_freqs=common_frequencies, bin_min_freq=bin_min_freq,
+                **passband_kwargs)
 
             # n_rms_iters=n_rms_iters,
             # spike_threshold=spike_threshold, bin_min_freq=bin_min_freq,
