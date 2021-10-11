@@ -1281,7 +1281,8 @@ def plot_band(frequencies, band, band_center, band_width, bin_min, plot_func,
 
 
 def run_through_bands(band_label, *passband_args, weight_func=np.square,
-                      plots=False, **passband_kwargs):
+                      plots=False, bootstrap_confidence_level=.95,
+                      **passband_kwargs):
     passbands, attrs, average_bands, frequencies = obtain_passbands(
         *passband_args, plots=plots, **passband_kwargs)
     all_passbands, all_band_attrs = get_all_band_items(passbands, attrs)
@@ -1358,7 +1359,7 @@ def run_through_bands(band_label, *passband_args, weight_func=np.square,
     upper, lower = bootstrap_plot(
         total_average_band, all_passbands, frequencies, weights, 1000,
         band_label, 'r', 'lightpink', norm_start_freq=norm_start_freq,
-        plot_start_freq=2, confidence_level=.95)
+        plot_start_freq=2, confidence_level=bootstrap_confidence_level)
 
     # package these nicely into dictionaries to read
     total_band_data = {'passbands': all_passbands, 'attrs':  all_band_attrs}
