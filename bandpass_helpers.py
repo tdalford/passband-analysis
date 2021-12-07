@@ -48,6 +48,20 @@ def filter_frequency_mask(n_samples, f_ranges, c,
 # uses smart RMS to find outliers, replace them with the average of neighbors
 
 
+def modified_z_score(intensity):
+    median_int = np.median(intensity)
+    mad_int = np.median([np.abs(intensity - median_int)])
+    modified_z_scores = 0.6745 * (intensity - median_int) / mad_int
+    return modified_z_scores
+
+
+def whitaker_hayes_z_score(timestream):
+    # calculate the difference between consecutive spectrum points
+    # z = .6745 * (del y_t - M) / (median absolute deviation)
+    grad = np.diff(timestream)
+    return np.array(modified_z_score(grad))
+
+
 def despike_timeseries(timestream, threshold):
     avg, rms = smart_rms(timestream, 7, threshold)
     timestream = timestream - avg  # remove the mean
@@ -1597,6 +1611,94 @@ def get_centroid_response(run_num, band_num, total_good_channels, array_data,
     return np.array(average_attrs), total_attrs
 
 
+def get_centroid_bands(run_num, band_num, total_good_channels, array_data,
+                       x_locs, y_locs, *passband_args, **passband_kwargs):
+    good_channels = total_good_channels[run_num][band_num]
+    good_x = x_locs[good_channels]
+    good_y = y_locs[good_channels]
+    good_points = np.array([good_x, good_y]).T
+    if len(good_points) == 0:
+        return []
+
+    centroid = np.sum(good_points, axis=0) / len(good_points)
+    # now plot top half, bottom half, left half, right half
+    bottom_half = np.where(good_points[:, 1] < centroid[1])
+    top_half = np.where(good_points[:, 1] >= centroid[1])
+    left_half = np.where(good_points[:, 0] < centroid[0])
+    right_half = np.where(good_points[:, 0] >= centroid[0])
+
+    # print(good_channels[top_half])
+    if passband_kwargs['plots']:
+        plt.scatter(good_x[top_half], good_y[top_half], c='green',
+                    s=get_amplitudes([array_data[run_num]], good_channels[
+                        top_half]))
+        plt.scatter(good_x[bottom_half], good_y[bottom_half], c='red',
+                    s=get_amplitudes([array_data[run_num]], good_channels[
+                        bottom_half]))
+        plt.show()
+
+        plt.scatter(good_x[left_half], good_y[left_half], c='red')
+        plt.scatter(good_x[right_half], good_y[right_half], c='green')
+        plt.show()
+
+    total_attrs = []
+
+    # NEED TO MODIFY THIS TO TAKE THE CENTROID INTO ACCOUNT!!!
+    for split in [top_half, bottom_half, left_half, right_half]:
+        passbands, attrs, _, _ = obtain_passbands(
+            band_num, [array_data[run_num]],
+            [[good_channels[split], good_channels[split]]], *passband_args,
+            centroid=centroid, **passband_kwargs)
+
+        # if there's only 1 point on each side, we don't have enough info
+        # to make a reasonable estimate.
+        if len(passbands[0]) <= 0:
+            return []
+        total_attrs.append(attrs[0])
+    return total_attrs
+
+
+def get_total_centroid_bands(good_runs, band_num, total_good_channels,
+                             array_data, x_locs, y_locs, *passband_args,
+                             **passband_kwargs):
+    total_attrs = [[], [], [], []]
+    for run in good_runs:
+        attrs = get_centroid_bands(run, band_num, total_good_channels,
+                                   array_data, x_locs, y_locs, *passband_args,
+                                   **passband_kwargs)
+        # combine the attrs
+        for i, split_attrs in enumerate(attrs):
+            for split_attr in split_attrs:
+                total_attrs[i].append(split_attr)
+
+    return total_attrs
+
+
+def get_centroid_difference(total_centroid_attrs, plot=True):
+    if (plot):
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+        for split_data in total_centroid_attrs[0:2]:
+            axes[0].hist(np.array(split_data)[:, 1], alpha=.3)
+
+        for split_data in total_centroid_attrs[2:]:
+            axes[1].hist(np.array(split_data)[:, 1], alpha=.3)
+        for ax in axes:
+            ax.grid()
+
+    def get_errors(data):
+        mean, std = weighted_rms(np.array(data)[:, 1],
+                                 np.array(data)[:, 3] ** 2)
+        return mean, std / np.sqrt(len(data))
+
+    def subtract_means(mean_1, std_1, mean_2, std_2):
+        return ((mean_1 - mean_2), np.sqrt(std_1 ** 2 + std_2 ** 2))
+
+    return subtract_means(*get_errors(total_centroid_attrs[0]),
+                          *get_errors(total_centroid_attrs[1])), \
+        subtract_means(*get_errors(total_centroid_attrs[2]),
+                       *get_errors(total_centroid_attrs[3]))
+
+
 def get_band_edges_manually(passband, limit=.05):
     # go until we hit .05
     current_index = np.argmax(passband)
@@ -1788,6 +1890,14 @@ def plot_spatial_variation(attr_data, x_positions, y_positions, attr_index):
     plt.xlabel('y (mm)')
     plt.ylabel('z (mm)')
     plt.grid(False)
+
+
+def get_top_repeats(set_map, n=5):
+    ch_array = np.zeros((len(set_map), 2), dtype='int')
+    # first get an array with ch, # of channels
+    for i, ch in enumerate(set_map.keys()):
+        ch_array[i] = [ch, len(set_map[ch])]
+    return ch_array[np.argsort(ch_array[:, 1])][::-1][:n][:, 0]
 
 
 def channel_spread(ch, run_indices, all_attrs):
