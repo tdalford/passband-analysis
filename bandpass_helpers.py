@@ -1295,8 +1295,8 @@ def plot_band(frequencies, band, band_center, band_width, bin_min, plot_func,
 
 
 def run_through_bands(band_label, *passband_args, weight_func=np.square,
-                      plots=False, bootstrap_confidence_level=.95,
-                      **passband_kwargs):
+                      plots=False, hist_cuts=True,
+                      bootstrap_confidence_level=.95, **passband_kwargs):
     passbands, attrs, average_bands, frequencies = obtain_passbands(
         *passband_args, plots=plots, **passband_kwargs)
     all_passbands, all_band_attrs = get_all_band_items(passbands, attrs)
@@ -1306,11 +1306,12 @@ def run_through_bands(band_label, *passband_args, weight_func=np.square,
     upper_bound = passband_kwargs['upper_bound']
     norm_start_freq = bin_min
 
-    for index, label in zip([1, 2, 4, 5], [
-            'band centers', 'band widths', 'band lower edges',
-            'band upper edges']):
-        all_passbands, all_band_attrs = band_hist_cuts(
-            all_passbands, all_band_attrs, index, label, band_label)
+    if (hist_cuts):
+        for index, label in zip([1, 2, 4, 5], [
+                'band centers', 'band widths', 'band lower edges',
+                'band upper edges']):
+            all_passbands, all_band_attrs = band_hist_cuts(
+                all_passbands, all_band_attrs, index, label, band_label)
 
     if (plots):
         plot_band_snr_values(all_band_attrs, band_label)
