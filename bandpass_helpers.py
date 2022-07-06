@@ -182,9 +182,7 @@ def plot_band_snr_values(band_attrs, band):
 
 
 def plot_colored_hist(data, bins, snr_values, n_rms_iters=7, rms_threshold=5,
-                      average=None, devs=None, label=None, max_color_snr=90,
-                      min_color_snr=50):
-
+                      average=None, devs=None, label=None):
     bin_locs = np.linspace(data.min(), data.max(), bins)
     bin_vals = np.digitize(data, bin_locs)
     width = bin_locs[1] - bin_locs[0]
@@ -199,10 +197,8 @@ def plot_colored_hist(data, bins, snr_values, n_rms_iters=7, rms_threshold=5,
             color_data_value = np.nan
         all_color_values.append(color_data_value)
 
-    # max_color_value = np.nanmax(all_color_values)
-    # min_color_value = np.nanmin(all_color_values)
-    max_color_value = max_color_snr
-    min_color_value = min_color_snr
+    max_color_value = np.nanmax(all_color_values)
+    min_color_value = np.nanmin(all_color_values)
 
     # plot the bars individually now.
     cmap = plt.get_cmap('viridis')
