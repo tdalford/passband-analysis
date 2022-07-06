@@ -182,7 +182,8 @@ def plot_band_snr_values(band_attrs, band):
 
 
 def plot_colored_hist(data, bins, snr_values, n_rms_iters=7, rms_threshold=5,
-                      average=None, devs=None, label=None):
+                      average=None, devs=None, label=None, max_color_snr=90,
+                      min_color_snr=50):
 
     bin_locs = np.linspace(data.min(), data.max(), bins)
     bin_vals = np.digitize(data, bin_locs)
@@ -198,8 +199,10 @@ def plot_colored_hist(data, bins, snr_values, n_rms_iters=7, rms_threshold=5,
             color_data_value = np.nan
         all_color_values.append(color_data_value)
 
-    max_color_value = np.nanmax(all_color_values)
-    min_color_value = np.nanmin(all_color_values)
+    # max_color_value = np.nanmax(all_color_values)
+    # min_color_value = np.nanmin(all_color_values)
+    max_color_value = max_color_snr
+    min_color_value = min_color_snr
 
     # plot the bars individually now.
     cmap = plt.get_cmap('viridis')
@@ -1289,7 +1292,7 @@ def get_band_attrs(band, frequencies, lower_bound, upper_bound, slope_cut,
     return center_freq, width, lower_edge, upper_edge
 
 
-def get_repeats(total_good_band_channels, band_num, ch=None):
+def get_channel_repeats(total_good_band_channels, band_num, ch=None):
     # Actually hasmap these with channel -> list of datasets
     channel_set_map = get_channel_dict(total_good_band_channels, band_num)
 
@@ -1299,7 +1302,7 @@ def get_repeats(total_good_band_channels, band_num, ch=None):
     return max_channel, channel_set_map[max_channel]
 
 
-def get_top_repeats(set_map, n=5):
+def get_top_channel_repeats(set_map, n=5):
     ch_array = np.zeros((len(set_map), 2), dtype='int')
     # first get an array with ch, # of channels
     for i, ch in enumerate(set_map.keys()):
