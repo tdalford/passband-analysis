@@ -1298,7 +1298,8 @@ def get_channel_repeats(total_good_band_channels, band_num, ch=None):
     return max_channel, channel_set_map[max_channel]
 
 
-def get_top_channel_repeats(set_map, n=5):
+def get_top_channel_repeats(total_good_band_channels, band_num, n=5):
+    set_map = get_channel_dict(total_good_band_channels, band_num)
     ch_array = np.zeros((len(set_map), 2), dtype='int')
     # first get an array with ch, # of channels
     for i, ch in enumerate(set_map.keys()):
