@@ -44,9 +44,10 @@ def get_fts_ind_ranges(fts_position_inds):
     ind_ranges = []
     for i, inds in enumerate(fts_position_inds):
         ind_start, ind_end = inds[0], inds[-1]
+        # If there's only one housekeeping index (happens rarely with >1s
+        # integration unless it skips a data point), get the previous one
+        # which is further away and integrate in that direction.
         if ind_start == ind_end:
-            # get the previous one which is further away and integrate in that
-            # direction.
             next_ind = fts_position_inds[i + 1][0]
             prev_ind = fts_position_inds[i - 1][-1]
             if (next_ind - ind_start) > (ind_start - prev_ind):
