@@ -1,4 +1,5 @@
 import numpy as np
+import math
 import matplotlib.pyplot as plt
 from so3g.hk import load_range
 from sotodlib.flags import get_glitch_flags
@@ -7,22 +8,6 @@ from sotodlib.flags import get_glitch_flags
 def find_time(timestamps, time):
     '''finds closest time index in array timestamps to the inputted time'''
     return (np.abs(timestamps - time)).argmin()
-
-
-def set_bias_groups(aman, bias_group_map):
-    # get the bias groups
-    bias_map = np.load(bias_group_map, allow_pickle=True).item()
-
-    bias_group = -1*np.ones_like(aman.ch_info.band)
-    for i in range(aman.dets.count):
-        try:
-            bias_group[i] = bias_map[aman.ch_info.band[i]
-                                     ][aman.ch_info.channel[i]]
-        except KeyError:
-            bias_group[i] = -1
-
-    aman.ch_info.wrap('bias_group', bias_group, [(0, 'dets')])
-    return
 
 
 def get_good_dets(aman, Pxx, freqs, power_threshold=1000, plot=False):
@@ -114,6 +99,37 @@ def integrate_signal(signal, total_non_glitch_inds):
     return np.array([np.mean(signal[inds]) for inds in total_non_glitch_inds])
 
 
+def load_fts_range(aman, resolution=.15):
+    hk_data = load_range(
+        float(aman.timestamps[0]), float(aman.timestamps[-1]),
+        config='/data/users/kmharrin/smurf_context/hk_config_202104.yaml')
+
+    max_position = -1 * np.round(np.min(hk_data['fts_mirror'][1]), 2)
+    expected_fts_mirror_positions = np.round(np.linspace(
+        -1 * max_position, max_position,
+        int(2 * max_position / resolution) + 1), 6)
+    hk_mirror_positions = hk_data['fts_mirror'][1]
+    # now take out the initial data chunk
+    last_max_index = np.where(
+        np.abs(hk_mirror_positions - (-1 * max_position)) <= .01)[0][-2]
+    hk_mirror_positions = hk_mirror_positions[last_max_index:]
+    hk_times = hk_data['fts_mirror'][0][last_max_index:]
+    hk_mirror_slice = []
+    hk_time_slice = []
+    for pos in expected_fts_mirror_positions:
+        hk_index = np.where(np.abs(hk_mirror_positions - pos) <= .01)[0][0]
+        hk_position = hk_mirror_positions[hk_index]
+        hk_time = hk_times[hk_index]
+        hk_mirror_slice.append(hk_position)
+        hk_time_slice.append(hk_time)
+
+    assert (np.abs(hk_mirror_slice - expected_fts_mirror_positions) <= .01).all()
+
+    aman_fts_position_timeslice = np.array(
+        [find_time(aman.timestamps, time) for time in hk_time_slice])
+    return aman_fts_position_timeslice, np.array(hk_mirror_slice)
+
+
 def load_fts_range_bounds(aman, resolution=.15):
     hk_data = load_range(
         float(aman.timestamps[0]), float(aman.timestamps[-1]),
@@ -136,8 +152,14 @@ def load_fts_range_bounds(aman, resolution=.15):
     hk_time_slice = []
     for pos in expected_fts_mirror_positions:
         hk_inds = np.where(np.abs(hk_mirror_positions - pos) <= .01)[0]
-        hk_position = hk_mirror_positions[hk_inds][0]
-        hk_time = hk_times[hk_inds]
+        if len(hk_inds) == 0:
+            print(f"no housekeeping data at fts position {pos}. "
+                  "Using data from previous position")
+            hk_position = hk_mirror_slice[-1]
+            hk_time = hk_time_slice[-1]
+        else:
+            hk_position = hk_mirror_positions[hk_inds][0]
+            hk_time = hk_times[hk_inds]
         hk_mirror_slice.append(hk_position)
         hk_time_slice.append(hk_time)
 
@@ -147,25 +169,27 @@ def load_fts_range_bounds(aman, resolution=.15):
     return hk_mirror_slice, aman_fts_position_timeslice
 
 
-def plot_good_interferograms(aman, good_dets, signal, fts_mirror_positions):
-    fig, axes = plt.subplots(3, 2, figsize=(10, 5))
+def plot_good_interferograms(aman, good_dets, signal, fts_mirror_positions,
+                             figsize=(10, 10)):
+    n_bias_groups = np.max(aman.det_info.smurf.bias_group) + 1
+    fig, axes = plt.subplots(math.ceil(n_bias_groups / 2), 2, figsize=figsize)
     axes = axes.ravel()
 
-    for group in range(6):
+    for group in range(n_bias_groups):
         axes[group].grid(True)
-        count = np.sum(aman.ch_info.bias_group[good_dets] == group)
+        count = np.sum(aman.det_info.smurf.bias_group[good_dets] == group)
         axes[group].set_title(
             "bias group %s, number of 'good' dets = %s" % (group, count))
 
     print('number of interferograms in bias group -1: %s' % np.sum(
-        aman.ch_info.bias_group[good_dets] == -1))
+        aman.det_info.smurf.bias_group[good_dets] == -1))
 
     for i in range(0, aman.dets.count):
         if aman.dets.vals[i] in aman.flags.has_cuts(['trends']) or np.max(
                 signal[i]) > 1:
             continue
 
-        group = aman.ch_info.bias_group[i]
+        group = aman.det_info.smurf.bias_group[i]
         if (group != -1) and i in good_dets:
             axes[group].plot(fts_mirror_positions, signal[i])
     plt.tight_layout()
@@ -181,7 +205,7 @@ def save_data(aman, n, fts_mirror_positions, signal, folder_name,
     bands = np.zeros(len(band_channel_map))
     channels = np.zeros(len(band_channel_map))
     for i in range(aman.dets.count):
-        band, channel = aman.ch_info.band[i], aman.ch_info.channel[i]
+        band, channel = aman.det_info.smurf.band[i], aman.det_info.smurf.channel[i]
         band_channel_id = band_channel_map[(band, channel)]
         # print(band, channel)
         if aman.dets.vals[i] in aman.flags.has_cuts(['trends']):

@@ -1,4 +1,6 @@
 import numpy as np
+import pandas as pd
+import seaborn as sns
 import matplotlib
 import matplotlib.pyplot as plt
 from scipy import optimize, signal, interpolate
@@ -42,7 +44,7 @@ def filter_frequency_mask(n_samples, f_ranges, c,
 
 
 def despike_timeseries(timestream, threshold):
-    '''eliminates huge spikes in data (assumed not "real") uses smart RMS to 
+    '''eliminates huge spikes in data (assumed not "real") uses smart RMS to
     find outliers, replace them with the average of neighbors.'''
     avg, rms = smart_rms(timestream, 7, threshold)
     timestream = timestream - avg  # remove the mean
@@ -240,17 +242,20 @@ def weighted_rms(data, weights):
 
 
 def band_hist_cuts(passbands, band_attrs, attr_index, attr_label, band_label,
-                   n_rms_iters=7, rms_threshold=5, dev_threshold=4):
+                   n_rms_iters=7, rms_threshold=5, dev_threshold=4, plot=True,
+                   weight_func=np.square):
     indiv_attrs = band_attrs[:, attr_index]
     # s_avg, s_rms = smart_rms(indiv_attrs, n_rms_iters, rms_threshold)
-    s_avg, s_rms = weighted_rms(indiv_attrs, band_attrs[:, 3] ** 2)
+    s_avg, s_rms = weighted_rms(indiv_attrs, weight_func(band_attrs[:, 3]))
     # plt.hist(indiv_attrs, bins=50)
     # plt.grid()
     # plt.title('%s %s' % (attr_label, band_label))
     # plt.show()
 
-    plot_colored_hist(indiv_attrs, 21, band_attrs[:, 3], devs=dev_threshold)
-    plt.title('%s %s Ghz' % (attr_label, band_label))
+    if plot:
+        plot_colored_hist(
+            indiv_attrs, 21, band_attrs[:, 3], devs=dev_threshold)
+        plt.title('%s %s Ghz' % (attr_label, band_label))
 
     # print("smart mean: %.3g, smart_rms: %.3g" % (s_avg, s_rms))
     num_deviations = np.abs(indiv_attrs - s_avg) / s_rms
@@ -264,7 +269,8 @@ def band_hist_cuts(passbands, band_attrs, attr_index, attr_label, band_label,
                   np.round(num_deviations[large_devs], 2)))
     else:
         print('no bands removed.\n')
-    plt.show()
+    if plot:
+        plt.show()
     print(70 * '-')
     return passbands[small_devs], band_attrs[small_devs]
 
@@ -279,7 +285,8 @@ def divide_by_nonmax_mean(arr):
 
 
 def find_interferograms_clean(data, fourier_band_filters, fourier_noise_filter,
-                              spike_threshold, take_sqrt=False):
+                              spike_threshold, take_sqrt=False,
+                              divide_by_nonmax_mean=True):
     '''get initial cut stats for all the bands.'''
     n_chans = np.shape(data)[1]
     n_bands = len(fourier_band_filters)
@@ -291,7 +298,8 @@ def find_interferograms_clean(data, fourier_band_filters, fourier_noise_filter,
                                       take_sqrt=take_sqrt)
                          for f in fourier_band_filters]
             # divide by the mean of the cut stats that didn't make it
-            cut_stats = list(divide_by_nonmax_mean(np.array(cut_stats)))
+            if divide_by_nonmax_mean:
+                cut_stats = list(divide_by_nonmax_mean(np.array(cut_stats)))
             total_cut_stats[i] = cut_stats
 
     # normalize each cut statistic relative to itimeseries spike rejected rms
@@ -622,7 +630,7 @@ def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
                  n_rms_iters=5, spike_threshold=10, take_sqrt=False,
                  bin_min_freq=15, lower_bound=22., upper_bound=35.,
                  slope_cut=1e-3, poly_order=5, end_fit_freq=23,
-                 noise_bounds=(60, None), fit_noise=True,
+                 noise_bounds=(60, None), fit_noise=False,
                  correction_func=None, correction_params=[], max_ind=None,
                  subtract_mean=True, edge_power_limit=.05, normalize=True,
                  amplitude_transfer_func=None, interp_freqs=None,
@@ -868,7 +876,7 @@ def find_integration_limits(passband, frequency, lower_start_frequency,
 
     upper_start and lower_start: starting search indices for
     frequency from which we move inward to find the point at which slope
-    increases 
+    increases
 
     to plot, enter plot=plot
     '''
@@ -937,7 +945,7 @@ def integrate_bands(frequency_range, passband_range, spectral_index):
 def return_cent(passband, frequency, lower_bound_frequency,
                 upper_bound_frequency, slope_cut, classification,
                 spectral_index, plot):
-    '''calculates weighted band centers (for synchrotron, free-free, 
+    '''calculates weighted band centers (for synchrotron, free-free,
     Rayleigh-Jeans, and dust sources) for a single passband'''
     lower, upper = find_integration_limits(
         passband, frequency, lower_bound_frequency, upper_bound_frequency,
@@ -1181,10 +1189,11 @@ def plot_band(frequencies, band, band_center, band_width, bin_min, plot_func,
 
 
 def run_through_bands(band_label, *passband_args, weight_func=np.square,
-                      plots=False, hist_cuts=True,
+                      plots=False, run_plots=True, hist_cuts=True,
+                      hist_cut_plots=True, summary_plots=True,
                       bootstrap_confidence_level=.95, **passband_kwargs):
     passbands, attrs, average_bands, frequencies = obtain_passbands(
-        *passband_args, plots=plots, **passband_kwargs)
+        *passband_args, plots=run_plots, **passband_kwargs)
     all_passbands, all_band_attrs = get_all_band_items(passbands, attrs)
 
     bin_min = find_freq(frequencies, passband_kwargs['bin_min_freq'])
@@ -1197,12 +1206,13 @@ def run_through_bands(band_label, *passband_args, weight_func=np.square,
                 'band centers', 'band widths', 'band lower edges',
                 'band upper edges']):
             all_passbands, all_band_attrs = band_hist_cuts(
-                all_passbands, all_band_attrs, index, label, band_label)
+                all_passbands, all_band_attrs, index, label, band_label,
+                plot=hist_cut_plots, weight_func=weight_func)
 
-    if (plots):
+    if (summary_plots):
         plot_band_snr_values(all_band_attrs, band_label)
 
-    weights = weight_func(all_band_attrs[:, 3])
+    weights = weight_func(all_band_attrs[:, 3])  # apply weight func to SNR
     total_average_band = normalize_passband(obtain_average_band(
         all_passbands, weights), lower_index=bin_min)
 
@@ -1210,26 +1220,27 @@ def run_through_bands(band_label, *passband_args, weight_func=np.square,
         average_upper_edge = get_band_attrs(
             total_average_band, frequencies, lower_bound, upper_bound, 1e-10)
 
-    if (plots):
+    if (summary_plots):
         for plot_func in (plt.plot, plt.semilogy):
             plot_band(frequencies, total_average_band, average_center_freq,
                       average_bandwidth, 2, plot_func, lower_bound,
                       upper_bound, average_lower_edge, average_upper_edge)
 
-    spread = bootstrap_integration_limits(
-        total_average_band, frequencies, [lower_bound - 10, lower_bound],
-        [upper_bound, upper_bound + 10], 1e-10, band_label, iterations=1000,
-        plot=plots)
-    if (plots):
-        plt.show()
+    # Not a huge effect- taking out for now.
+    # spread = bootstrap_integration_limits(
+    #     total_average_band, frequencies, [lower_bound - 10, lower_bound],
+    #     [upper_bound, upper_bound + 10], 1e-10, band_label, iterations=1000,
+    #     plot=plots)
+    # if (plots):
+    #     plt.show()
 
-    means, stds = bootstrap_attrs(
-        all_passbands, weights, frequencies, 1000,
-        band_label, lower_bound, upper_bound, 1e-10, plot_hists=plots)
-    if (plots):
-        plt.show()
+    # means, stds = bootstrap_attrs(
+    #     all_passbands, weights, frequencies, 1000,
+    #     band_label, lower_bound, upper_bound, 1e-10, plot_hists=plots)
+    # if (plots):
+    #     plt.show()
 
-    if (plots):
+    if (summary_plots):
         for i, attr_index in enumerate([1, 2, 4, 5]):
             label = ['center', 'width', 'lower edge', 'upper edge'][i]
             plot_colored_hist(
@@ -1267,8 +1278,9 @@ def run_through_bands(band_label, *passband_args, weight_func=np.square,
     total_band_data = {'passbands': all_passbands, 'attrs':  all_band_attrs}
     indiv_run_data = {'passbands': passbands, 'attrs': attrs,
                       'average_bands': average_bands}
-    stat_data = {'means': means, 'stds': stds, 'spread': spread,
-                 'upper': upper, 'lower': lower}
+    # stat_data = {'means': means, 'stds': stds, 'spread': spread,
+    #              'upper': upper, 'lower': lower}
+    stat_data = {'upper': upper, 'lower': lower}
     return {'stat_data': stat_data, 'total_band_data': total_band_data,
             'individual_run_data': indiv_run_data, 'frequencies': frequencies,
             'total_average_band': total_average_band}
@@ -1390,9 +1402,8 @@ def get_centroid_response(run_num, band_num, total_good_channels, array_data,
 
     average_attrs = []
     for i, (attrs, average) in enumerate(zip(total_attrs, total_averages)):
-        average_center_freq, average_bandwidth, lower_edge, upper_edge = \
-            get_band_attrs(average, frequencies, lower_bound, upper_bound,
-                           1e-10)
+        average_center_freq, average_bandwidth, lower_edge, upper_edge = get_band_attrs(average, frequencies, lower_bound, upper_bound,
+                                                                                        1e-10)
 
         average_attrs.append([average_center_freq, average_bandwidth,
                               lower_edge, upper_edge])
@@ -1552,23 +1563,28 @@ def fit_band_edge(frequencies, passband, edge_guess_ind, plot=False,
         plt.axvline(closest_root)
         plt.show()
     # if the fitis really off, just return the earlier guess.
-    if (closest_root) < 0 or closest_root > 300 or np.abs(
+    if (closest_root) < 0 or closest_root > np.max(frequencies) or np.abs(
             frequencies[edge_guess_ind] - closest_root) > 4:
-        return edge_guess_ind
+        return frequencies[edge_guess_ind]
     return closest_root
 
 
 def get_band_edges(frequencies, passband, limit=.05, plot=False):
     # make sure this band is normalized.
-    if np.max(passband) != 1:
-        return None, None
+    # if np.max(passband) != 1:
+    #     return None, None
 
     try:
         start, end = get_band_edges_manually(passband, limit=limit)
         low_edge = fit_band_edge(frequencies / 1e9, passband, start, plot=plot)
         upper_edge = fit_band_edge(frequencies / 1e9, passband, end, plot=plot)
     except IndexError:
+        # return (frequencies / 1e9)[start], (frequencies / 1e9)[end]
+        print('edges not fitted... returning 0 for each')
+        return 0, 0
         return None, None
+    except ValueError:
+        return (frequencies / 1e9)[start], (frequencies / 1e9)[end]
     return low_edge, upper_edge
 
 
@@ -1703,8 +1719,8 @@ def plot_spatial_variation(attr_data, x_positions, y_positions, attr_index):
     plt.grid(False)
 
 
-def channel_spread(ch, run_indices, all_attrs):
-    plt.figure(figsize=(10, 5))
+def channel_spread(ch, run_indices, all_attrs, data_attrs):
+    plt.figure(figsize=(6, 5))
     freqs = all_attrs['frequencies']
     for run in run_indices:
         channel_ind = np.where(
@@ -1716,14 +1732,99 @@ def channel_spread(ch, run_indices, all_attrs):
             channel_ind]
         center, width, snr, low_edge, upper_edge = all_attrs[
             'individual_run_data']['attrs'][run][channel_ind][1:]
+        xy_position = np.asarray(data_attrs[run]['xy_position'])
         plt.plot(freqs / 1e9, passband, alpha=.8,
-                 label='run %s: %.1f %.3g, %.3g %.1f %.1f' % (
-                     run, center, width, snr, low_edge, upper_edge))
+                 label='FTS position %s: center = %.4g'
+                 ', SNR = %.3g, 5%% edges = (%.1f, %.1f)' % (
+                     xy_position, center, snr, low_edge, upper_edge))
 
     # Plot total average band
-    plt.plot(freqs / 1e9, all_attrs['total_average_band'], '--', color='black',
-             label='average band over all detectors', alpha=.8)
-    plt.title('Spread of channel %s bands over various runs (PA4)' % ch)
-    plt.legend(loc='upper left', bbox_to_anchor=(0, -.2))
+    # plt.plot(freqs / 1e9, all_attrs['total_average_band'], '--', color='black',
+    #          label='average band over all detectors', alpha=.8)
+    plt.title('Spread of det %s bands over various runs FTS positions' % ch)
+    plt.legend(loc='upper right', bbox_to_anchor=(2.5, 1), fontsize=11)
     plt.xlabel('frequency (Ghz)')
     plt.ylabel('normalized passband amplitude')
+
+
+def partition(array):
+    return {i: (array == i).nonzero()[0] for i in np.unique(array)}
+
+
+def get_highest_snr_dets(bands, attrs):
+    dets = attrs[:, 0]
+    unique_items = partition(dets)
+    new_bands = []
+    new_attrs = []
+    for det in unique_items.keys():
+        inds = unique_items[det]
+        # snrs = attrs[inds, 3]
+        # print(np.sort(snrs))
+        same_bands = bands[inds]
+        # now get the SNR for each
+        # noise_start_ind = bh.find_freq(frequencies, noise_start_freq)
+        # snrs_old = [1 / np.std(band[noise_start_ind:]) for band in same_bands]
+        # print(np.sort(snrs), np.sort(snrs_old))
+        # just plan it so SNRs are not limited to 80, much easier
+        snrs_old = attrs[:, 3][inds]
+        max_ind = np.argmax(snrs_old)
+        new_bands.append(same_bands[max_ind])
+        new_attrs.append(attrs[inds][max_ind])
+        assert np.abs(attrs[inds][max_ind, 3] -
+                      np.min([1000, np.max(snrs_old)])) <= .1
+
+    return np.array(new_bands), np.array(new_attrs)
+
+
+def fill_out_df(df, data_attrs):
+    x_vals = np.unique(np.array([data_attrs[i]['xy_position']
+                                 for i in range(len(data_attrs))])[:, 0])
+    y_vals = np.unique(np.array([data_attrs[i]['xy_position']
+                                 for i in range(len(data_attrs))])[:, 1])
+    for x in x_vals:
+        for y in y_vals:
+            if df[(df['x'] == x) & (df['y'] == y)].empty:
+                df.loc[len(df.index)] = [x, y, 0]
+    return df
+
+
+def rough_spectra_beam_map(ch, ch_indices, data_attrs, band_attrs, band):
+    data = []
+    for run in ch_indices:
+        channel_ind = np.where(
+            band_attrs['individual_run_data']['attrs'][run][:, 0] == ch)[0]
+        if len(channel_ind) != 1:
+            continue
+        channel_ind = channel_ind[0]
+        passband = band_attrs['individual_run_data']['passbands'][run][
+            channel_ind]
+        center, width, snr, low_edge, upper_edge = band_attrs[
+            'individual_run_data']['attrs'][run][channel_ind][1:]
+        xy_position = np.asarray(
+            data_attrs[run]['xy_position'], dtype='float64')
+        data.append([xy_position[0], xy_position[1], snr])
+
+    data = np.array(data, dtype='float64')
+    cmap = matplotlib.cm.get_cmap('viridis').copy()
+    cmap.set_bad('white')
+    cmap.set_under(color='white')
+    df = pd.DataFrame(data, columns=['x', 'y', 'SNR'])
+    df = fill_out_df(df, data_attrs)
+    table = pd.pivot_table(df, values='SNR', index=['y'], columns=['x'])
+    plt.figure(figsize=(4, 3))
+    ax = sns.heatmap(
+        table, cmap=cmap, norm=matplotlib.colors.LogNorm(), cbar=True, vmin=10,
+        cbar_kws={'label': 'SNR', 'ticks': matplotlib.ticker.LogLocator(
+            base=10, numticks=10)},
+        annot=False, fmt="d", linewidths=.1, linecolor='black')
+    ax.invert_yaxis()
+    plt.title('band %d, channel %d (%s Ghz)' % (
+        data_attrs[ch_indices[0]]['bands'][ch],
+        data_attrs[ch_indices[0]]['channels'][ch], band), size=15)
+    for ind in ch_indices[:-1]:
+        assert data_attrs[ind]['bands'][ch] == data_attrs[ch_indices[0]][
+            'bands'][ch]
+        assert data_attrs[ind]['channels'][ch] == data_attrs[ch_indices[
+            0]]['channels'][ch]
+
+    plt.show()
