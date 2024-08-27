@@ -10,7 +10,16 @@ def find_time(timestamps, time):
     return (np.abs(timestamps - time)).argmin()
 
 
-def get_good_dets(aman, Pxx, freqs, power_threshold=1000, plot=False):
+# useful function for analyzing timestreams
+def time_zoom(aman, t_min, t_max):
+    # returns indices useful for getting a time window
+    time = aman.timestamps - aman.timestamps[0]
+    inds = np.where((time >= t_min) & (time <= t_max))[0]
+    return inds
+
+
+def get_good_dets(aman, Pxx, freqs, power_threshold=1000, plot=False,
+                  chop_freq=8):
     # get the 'good' dets with lots of power at 8Hz
     if (plot):
         plt.figure()
@@ -20,7 +29,7 @@ def get_good_dets(aman, Pxx, freqs, power_threshold=1000, plot=False):
         if aman.dets.vals[i] in aman.flags.has_cuts(['trends']):
             continue
 
-        index_of_8hz = np.where(freqs <= 8)[0][-1]
+        index_of_8hz = np.where(freqs <= chop_freq)[0][-1]
         if Pxx[i, index_of_8hz] > (Pxx[i, index_of_8hz + 10] * (
                 power_threshold)):
             good_dets.append(i)
@@ -44,6 +53,8 @@ def get_fts_ind_ranges(fts_position_inds):
     ind_ranges = []
     for i, inds in enumerate(fts_position_inds):
         ind_start, ind_end = inds[0], inds[-1]
+        if len(inds) > 2:
+            ind_start, ind_end = inds[0], inds[-2]
         # If there's only one housekeeping index (happens rarely with >1s
         # integration unless it skips a data point), get the previous one
         # which is further away and integrate in that direction.
@@ -118,37 +129,47 @@ def load_fts_range(aman, resolution=.15):
     hk_mirror_slice = []
     hk_time_slice = []
     for pos in expected_fts_mirror_positions:
-        hk_index = np.where(np.abs(hk_mirror_positions - pos) <= .01)[0][0]
-        hk_position = hk_mirror_positions[hk_index]
-        hk_time = hk_times[hk_index]
+        hk_inds = np.where(np.abs(hk_mirror_positions - pos) <= .01)[0]
+        if len(hk_inds) == 0:
+            print(f"no housekeeping data at fts position {pos}. "
+                  "Using data from previous position")
+            hk_position = hk_mirror_slice[-1]
+            hk_time = hk_time_slice[-1]
+        else:
+            hk_index = hk_inds[0]
+            hk_position = hk_mirror_positions[hk_index]
+            hk_time = hk_times[hk_index]
         hk_mirror_slice.append(hk_position)
         hk_time_slice.append(hk_time)
 
-    assert (np.abs(hk_mirror_slice - expected_fts_mirror_positions) <= .01).all()
+    #assert (np.abs(hk_mirror_slice - expected_fts_mirror_positions) <= .01).all()
 
     aman_fts_position_timeslice = np.array(
         [find_time(aman.timestamps, time) for time in hk_time_slice])
     return aman_fts_position_timeslice, np.array(hk_mirror_slice)
 
 
-def load_fts_range_bounds(aman, resolution=.15):
+def load_fts_range_bounds(aman, resolution=.15, max_position=None):
     hk_data = load_range(
         float(aman.timestamps[0]), float(aman.timestamps[-1]),
         config='/data/users/kmharrin/smurf_context/hk_config_202104.yaml')
 
-    max_position = -1 * np.round(np.min(hk_data['fts_mirror'][1]), 2)
+    if max_position is None:
+        max_position = -1 * np.round(np.min(hk_data['fts_mirror'][1]), 2)
     expected_fts_mirror_positions = np.round(np.linspace(
         -1 * max_position, max_position, int(
             2 * max_position / resolution) + 1), 6)
     hk_mirror_positions = hk_data['fts_mirror'][1]
     # now take out the initial data chunk
+    # start slightly after the beginning to account for any weird trends
     last_max_index = np.where(
-        np.abs(hk_mirror_positions - (-1 * max_position)) <= .01)[0][-2]
+        np.abs(hk_mirror_positions - (-1 * max_position)) <= .01)[0][2]
+    # start slightly before the end similarly
     first_right_max_index = np.where(
-        np.abs(hk_mirror_positions - max_position) <= .01)[0][2]
+        np.abs(hk_mirror_positions - max_position) <= .01)[0][-2]
     hk_mirror_positions = hk_mirror_positions[
         last_max_index: first_right_max_index]
-    hk_times = hk_data['fts_mirror'][0][last_max_index:first_right_max_index]
+    hk_times = hk_data['fts_mirror'][0][last_max_index: first_right_max_index]
     hk_mirror_slice = []
     hk_time_slice = []
     for pos in expected_fts_mirror_positions:
@@ -211,7 +232,9 @@ def save_data(aman, n, fts_mirror_positions, signal, folder_name,
         # print(band, channel)
         if aman.dets.vals[i] in aman.flags.has_cuts(['trends']):
             # just make this data a bunch of zeros
-            data[:, band_channel_id] = np.zeros(len(fts_mirror_positions))
+            # adjust this to actually save data-- don't trust trends lol
+            data[:, band_channel_id] = signal[i]
+            # data[:, band_channel_id] = np.zeros(len(fts_mirror_positions))
         else:
             data[:, band_channel_id] = signal[i]
 

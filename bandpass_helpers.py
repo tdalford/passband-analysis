@@ -43,6 +43,13 @@ def filter_frequency_mask(n_samples, f_ranges, c,
     return mask
 
 
+def remove_nans(timestream):
+    '''Remove NaNs and replace them with median of timestream'''
+    bads = np.where(np.isnan(timestream))
+    timestream[bads] = np.nanmean(timestream)
+    return timestream
+
+
 def despike_timeseries(timestream, threshold):
     '''eliminates huge spikes in data (assumed not "real") uses smart RMS to
     find outliers, replace them with the average of neighbors.'''
@@ -285,8 +292,7 @@ def divide_by_nonmax_mean(arr):
 
 
 def find_interferograms_clean(data, fourier_band_filters, fourier_noise_filter,
-                              spike_threshold, take_sqrt=False,
-                              divide_by_nonmax_mean=True):
+                              take_sqrt=False, divide_by_nonmax=True):
     '''get initial cut stats for all the bands.'''
     n_chans = np.shape(data)[1]
     n_bands = len(fourier_band_filters)
@@ -298,7 +304,7 @@ def find_interferograms_clean(data, fourier_band_filters, fourier_noise_filter,
                                       take_sqrt=take_sqrt)
                          for f in fourier_band_filters]
             # divide by the mean of the cut stats that didn't make it
-            if divide_by_nonmax_mean:
+            if divide_by_nonmax:
                 cut_stats = list(divide_by_nonmax_mean(np.array(cut_stats)))
             total_cut_stats[i] = cut_stats
 
@@ -682,12 +688,14 @@ def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
     if (subtract_mean):
         passband = passband - np.mean(passband[
             noise_start_index:noise_end_index])
+
+    normed_passband = normalize_passband(passband, lower_index=bin_min)
     if (normalize):
-        passband = normalize_passband(passband, lower_index=bin_min)
+        passband = normed_passband
 
     # calculate the band center and bandwidth and edges
     cf, bw, lower_edge, upper_edge = get_band_attrs(
-        passband, frequency_hz, lower_bound, upper_bound, slope_cut,
+        normed_passband, frequency_hz, lower_bound, upper_bound, slope_cut,
         bin_min=bin_min)
     cf = np.floor(cf*100)/100.
     bw = np.floor(bw*100)/100.
@@ -705,7 +713,8 @@ def get_passband(interferogram, fts_stage_step_size, fts_frequency_cal,
         frequency_hz = interp_freqs
 
     # calculate the SNR
-    snr = np.around(1 / np.std(passband[noise_start_index:]), decimals=1)
+    snr = np.around(
+        1 / np.std(normed_passband[noise_start_index:]), decimals=1)
     return passband, cf, bw, snr, lower_edge, upper_edge, frequency_hz
 
 
@@ -784,7 +793,7 @@ def obtain_passbands(
         band_num, data_sets, total_good_band_channels, fts_step_size,
         fts_frequency_cal, output_vals=False, bin_min_freq=15,
         plot_freq_range=None, low_snr_cutoff=15, high_snr_change=80,
-        high_snr_cutoff=1000, plots=True, **passband_kwargs):
+        high_snr_cutoff=1e10, plots=True, **passband_kwargs):
     average_bands = []
     total_passbands = []
     total_band_attrs = []
@@ -886,14 +895,18 @@ def find_integration_limits(passband, frequency, lower_start_frequency,
     # if we reach the end, just return without doing anything
     # try:
     lower_start_orig, upper_start_orig = lower_start, upper_start
-    while ((passband[int(lower_start+2)]-passband[int(lower_start)])/(
-            (frequency[int(lower_start+2)]-frequency[
-                int(lower_start)])/(1e9)) < slope_cut):
-        lower_start += 1
-    while ((passband[int(upper_start)]-passband[int(upper_start-2)])/((
-            frequency[int(upper_start)]-frequency[
-                int(upper_start-2)])/(1e9)) > -slope_cut):
-        upper_start -= 1
+    try:
+        while ((passband[int(lower_start+2)]-passband[int(lower_start)])/(
+                (frequency[int(lower_start+2)]-frequency[
+                    int(lower_start)])/(1e9)) < slope_cut):
+            lower_start += 1
+        while ((passband[int(upper_start)]-passband[int(upper_start-2)])/((
+                frequency[int(upper_start)]-frequency[
+                    int(upper_start-2)])/(1e9)) > -slope_cut):
+            upper_start -= 1
+    except IndexError:
+        print("index error when finding integration limits..")
+        return int(lower_start_orig), int(upper_start_orig)
     lower, upper = lower_start, upper_start
     # except IndexError:
     #    print('unable to integrate band...')
@@ -1068,7 +1081,7 @@ def bootstrap_attrs(all_bands, all_weights, frequencies, iterations,
                                       axis=0)
         center, lower_limit, upper_limit = return_cent(
             weighted_average, frequencies, lower_bound, upper_bound,
-            slope_cut, -1, [0], 'False')
+            slope_cut, -1, [2], 'False')  # change to spectra index of 2 for RJ
         center /= 1e9
         width = bandwidth(weighted_average, frequencies, lower_limit,
                           upper_limit)
@@ -1114,7 +1127,7 @@ def bootstrap_integration_limits(
         # print(lower_bound, upper_bound)
         center, lower, upper = return_cent(
             average_band, frequencies, lower_bound, upper_bound, 1e-100, -1,
-            [0], 'False')
+            [2], 'False')  # change to spectral index of 2 for RJ source
         # print(lower, upper)
         width = bandwidth(average_band, frequencies, lower, upper)
         attr_spread.append([center / 1e9, width])
@@ -1145,7 +1158,7 @@ def bootstrap_integration_limits_random(
                                         upper_bounds_random):
         center, lower, upper = return_cent(
             average_band, frequencies, lower_bound, upper_bound, 1e-100, -1,
-            [0], 'False')
+            [2], 'False')  # Change to spectra index of 2 for RJ
         width = bandwidth(average_band, frequencies, lower, upper)
         attr_spread.append([center / 1e9, width])
 
@@ -1290,7 +1303,7 @@ def get_band_attrs(band, frequencies, lower_bound, upper_bound, slope_cut,
                    bin_min=0):
     center_freq, lower_limit, upper_limit = return_cent(
         band, frequencies, lower_bound, upper_bound, slope_cut,
-        -1, [0], plot='False')
+        -1, [2], plot='False')  # change to spectra index of 2 for RJ
     center_freq /= 1e9
 
     width = bandwidth(band, frequencies, lower_limit, upper_limit)
@@ -1565,14 +1578,15 @@ def fit_band_edge(frequencies, passband, edge_guess_ind, plot=False,
     # if the fitis really off, just return the earlier guess.
     if (closest_root) < 0 or closest_root > np.max(frequencies) or np.abs(
             frequencies[edge_guess_ind] - closest_root) > 4:
+        # return None
         return frequencies[edge_guess_ind]
     return closest_root
 
 
 def get_band_edges(frequencies, passband, limit=.05, plot=False):
     # make sure this band is normalized.
-    # if np.max(passband) != 1:
-    #     return None, None
+    if np.max(passband) != 1:
+        return None, None
 
     try:
         start, end = get_band_edges_manually(passband, limit=limit)
@@ -1580,10 +1594,11 @@ def get_band_edges(frequencies, passband, limit=.05, plot=False):
         upper_edge = fit_band_edge(frequencies / 1e9, passband, end, plot=plot)
     except IndexError:
         # return (frequencies / 1e9)[start], (frequencies / 1e9)[end]
-        print('edges not fitted... returning 0 for each')
-        return 0, 0
+        print('edges not fitted... returning None for each')
+        # return 0, 0
         return None, None
     except ValueError:
+        return None, None
         return (frequencies / 1e9)[start], (frequencies / 1e9)[end]
     return low_edge, upper_edge
 
@@ -1723,8 +1738,11 @@ def channel_spread(ch, run_indices, all_attrs, data_attrs):
     plt.figure(figsize=(6, 5))
     freqs = all_attrs['frequencies']
     for run in run_indices:
-        channel_ind = np.where(
-            all_attrs['individual_run_data']['attrs'][run][:, 0] == ch)[0]
+        try:
+            channel_ind = np.where(
+                all_attrs['individual_run_data']['attrs'][run][:, 0] == ch)[0]
+        except IndexError:
+            continue
         if len(channel_ind) != 1:
             continue
         channel_ind = channel_ind[0]
@@ -1732,6 +1750,7 @@ def channel_spread(ch, run_indices, all_attrs, data_attrs):
             channel_ind]
         center, width, snr, low_edge, upper_edge = all_attrs[
             'individual_run_data']['attrs'][run][channel_ind][1:]
+
         xy_position = np.asarray(data_attrs[run]['xy_position'])
         plt.plot(freqs / 1e9, passband, alpha=.8,
                  label='FTS position %s: center = %.4g'
@@ -1741,7 +1760,10 @@ def channel_spread(ch, run_indices, all_attrs, data_attrs):
     # Plot total average band
     # plt.plot(freqs / 1e9, all_attrs['total_average_band'], '--', color='black',
     #          label='average band over all detectors', alpha=.8)
-    plt.title('Spread of det %s bands over various runs FTS positions' % ch)
+    det_band = data_attrs[run_indices[0]]['bands'][ch]
+    det_channel = data_attrs[run_indices[0]]['channels'][ch]
+    plt.title('Spread of det (%d, %d) bands over various runs FTS positions' % (
+       det_band, det_channel))
     plt.legend(loc='upper right', bbox_to_anchor=(2.5, 1), fontsize=11)
     plt.xlabel('frequency (Ghz)')
     plt.ylabel('normalized passband amplitude')
@@ -1788,11 +1810,15 @@ def fill_out_df(df, data_attrs):
     return df
 
 
-def rough_spectra_beam_map(ch, ch_indices, data_attrs, band_attrs, band):
+def rough_spectra_beam_map(ch, ch_indices, data_attrs, band_attrs,
+                           band_type):
     data = []
     for run in ch_indices:
-        channel_ind = np.where(
-            band_attrs['individual_run_data']['attrs'][run][:, 0] == ch)[0]
+        try:
+            channel_ind = np.where(
+                band_attrs['individual_run_data']['attrs'][run][:, 0] == ch)[0]
+        except IndexError:
+            continue
         if len(channel_ind) != 1:
             continue
         channel_ind = channel_ind[0]
@@ -1802,7 +1828,7 @@ def rough_spectra_beam_map(ch, ch_indices, data_attrs, band_attrs, band):
             'individual_run_data']['attrs'][run][channel_ind][1:]
         xy_position = np.asarray(
             data_attrs[run]['xy_position'], dtype='float64')
-        data.append([xy_position[0], xy_position[1], snr])
+        data.append([xy_position[0], xy_position[1], 10 * np.log10(snr)])
 
     data = np.array(data, dtype='float64')
     cmap = matplotlib.cm.get_cmap('viridis').copy()
@@ -1813,14 +1839,16 @@ def rough_spectra_beam_map(ch, ch_indices, data_attrs, band_attrs, band):
     table = pd.pivot_table(df, values='SNR', index=['y'], columns=['x'])
     plt.figure(figsize=(4, 3))
     ax = sns.heatmap(
-        table, cmap=cmap, norm=matplotlib.colors.LogNorm(), cbar=True, vmin=10,
-        cbar_kws={'label': 'SNR', 'ticks': matplotlib.ticker.LogLocator(
-            base=10, numticks=10)},
+        table, cmap=cmap, #norm=matplotlib.colors.LogNorm(), cbar=True, vmin=10,
+        cbar=True, vmin=10, cbar_kws = {'label': 'SNR [dB]'},
+        # cbar_kws={'label': 'SNR', 'ticks': matplotlib.ticker.LogLocator(
+        #     base=10, numticks=10)},
         annot=False, fmt="d", linewidths=.1, linecolor='black')
     ax.invert_yaxis()
+    band = data_attrs[ch_indices[0]]['bands'][ch]
+    channel = data_attrs[ch_indices[0]]['channels'][ch]
     plt.title('band %d, channel %d (%s Ghz)' % (
-        data_attrs[ch_indices[0]]['bands'][ch],
-        data_attrs[ch_indices[0]]['channels'][ch], band), size=15)
+        band, channel, band_type), size=15)
     for ind in ch_indices[:-1]:
         assert data_attrs[ind]['bands'][ch] == data_attrs[ch_indices[0]][
             'bands'][ch]
@@ -1828,3 +1856,4 @@ def rough_spectra_beam_map(ch, ch_indices, data_attrs, band_attrs, band):
             0]]['channels'][ch]
 
     plt.show()
+    return data, band, channel
