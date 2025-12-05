@@ -213,14 +213,15 @@ def plot_colored_hist(data, bins, snr_values, n_rms_iters=7, rms_threshold=5,
     cmap = plt.get_cmap('viridis')
     norm = matplotlib.colors.Normalize(vmin=min_color_value,
                                        vmax=max_color_value)
+    fig, ax = plt.subplots()
     for i, bin_ind in enumerate(range(1, bins + 1)):
         bin_positions = np.where(bin_vals == bin_ind)
         color_value = cmap(norm(all_color_values[i]))
         plt.bar(bin_locs[bin_ind - 1], len(bin_positions[0]),
                 color=color_value, width=width)
 
-    plt.colorbar(matplotlib.cm.ScalarMappable(norm, cmap=cmap),
-                 label='mean SNR per bin')
+    plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap),
+                 ax=ax, label='mean SNR per bin')
     plt.grid()
 
     # s_avg, s_rms = smart_rms(data, n_rms_iters, rms_threshold)
@@ -292,7 +293,7 @@ def divide_by_nonmax_mean(arr):
 
 
 def find_interferograms_clean(data, fourier_band_filters, fourier_noise_filter,
-                              take_sqrt=False, divide_by_nonmax=True):
+                              take_sqrt_of_data=False, divide_by_nonmax_of_data=True):
     '''get initial cut stats for all the bands.'''
     n_chans = np.shape(data)[1]
     n_bands = len(fourier_band_filters)
@@ -301,10 +302,10 @@ def find_interferograms_clean(data, fourier_band_filters, fourier_noise_filter,
     for i in range(n_chans):
         if (np.std(data[:, i]) > 1e-4):
             cut_stats = [get_cut_stat(data[:, i], f, fourier_noise_filter,
-                                      take_sqrt=take_sqrt)
+                                      take_sqrt=take_sqrt_of_data)
                          for f in fourier_band_filters]
             # divide by the mean of the cut stats that didn't make it
-            if divide_by_nonmax:
+            if divide_by_nonmax_of_data:
                 cut_stats = list(divide_by_nonmax_mean(np.array(cut_stats)))
             total_cut_stats[i] = cut_stats
 
@@ -590,7 +591,7 @@ def phase_correct_interferogram(
 
 
 def make_triangle_window(timeseries):
-    return signal.triang(np.size(timeseries))
+    return signal.windows.triang(np.size(timeseries))
 
 
 def invert_interferogram(interferogram, window):
@@ -835,7 +836,7 @@ def obtain_passbands(
         total_passbands.append(passbands)
         total_band_attrs.append(band_attrs)
 
-        if band_attrs != []:
+        if band_attrs.size != 0:
             weights = band_attrs[:, 3] ** 2
         else:
             weights = []
