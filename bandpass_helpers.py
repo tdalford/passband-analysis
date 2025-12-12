@@ -65,7 +65,7 @@ def despike_timeseries(timestream, threshold):
 def get_cut_stat(data, fourier_band_filter, out_of_band_filter,
                  take_sqrt=False):
     '''get cut statistic which is a rough S/N estiamte of the band.'''
-    if np.std(data) > 1e-4:
+    if np.std(data) > 1e-15:
         interferogram = get_cleaned_interferogram(data, 5, 10, 7,
                                                   take_sqrt=take_sqrt)
 
@@ -300,7 +300,7 @@ def find_interferograms_clean(data, fourier_band_filters, fourier_noise_filter,
     total_cut_stats = np.zeros((n_chans, n_bands))
 
     for i in range(n_chans):
-        if (np.std(data[:, i]) > 1e-4):
+        if (np.std(data[:, i]) > 1e-15):
             cut_stats = [get_cut_stat(data[:, i], f, fourier_noise_filter,
                                       take_sqrt=take_sqrt_of_data)
                          for f in fourier_band_filters]
